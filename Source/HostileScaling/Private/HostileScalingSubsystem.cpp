@@ -183,13 +183,18 @@ void AHostileScalingSubsystem::RefreshScaling()
                 ? OriginalSpawnCounts[Key]
                 : OriginalSpawnCounts.Add(Key, CurrentCount);
 
-            if (VanillaCount > 0)
+            if (VanillaCount > 0 && CurrentCount > 0)
             {
                 const int32 TargetCount = FMath::Max(1, FMath::RoundToInt(VanillaCount * SpawnMult));
 
                 while (Spawner->mSpawnData.Num() < TargetCount)
                 {
-                    FSpawnData Copy = Spawner->mSpawnData[Spawner->mSpawnData.Num() % VanillaCount];
+                    // Template index must stay inside the LIVE array: the
+                    // game can reload/regenerate a spawner with fewer entries
+                    // than the stored vanilla count (out-of-bounds crash
+                    // otherwise when exploring such spawners).
+                    const int32 TemplateRange = FMath::Min(VanillaCount, Spawner->mSpawnData.Num());
+                    FSpawnData Copy = Spawner->mSpawnData[Spawner->mSpawnData.Num() % TemplateRange];
                     Copy.Creature = nullptr;
                     Copy.WasKilled = false;
                     Copy.NumTimesKilled = 0;
