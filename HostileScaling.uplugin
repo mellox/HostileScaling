@@ -1,0 +1,33 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0.1",
+	"SemVersion": "1.0.1",
+	"GameVersion": ">=491125",
+	"FriendlyName": "Hostile Scaling",
+	"Description": "Scales hostile creature health, damage, and spawn frequency as you progress through milestone tiers. All scaling rates are user-configurable via Mod Config.",
+	"Category": "Modding",
+	"CreatedBy": "mello",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "HostileScaling",
+			"Type": "Runtime",
+			"LoadingPhase": "PostDefault"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "SML",
+			"Enabled": true,
+			"SemVersion": "^3.12.0"
+		}
+	]
+}
