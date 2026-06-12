@@ -72,6 +72,9 @@ void UHostileScalingConfig::PostInitProperties()
     {
         UConfigPropertyBool* Prop = NewObject<UConfigPropertyBool>(Root, BoolClass, FName(Key));
         Prop->Value = Default;
+        // The in-game Reset button does Value = DefaultValue, so DefaultValue
+        // must be set explicitly or reset snaps to zero/minimum instead.
+        Prop->DefaultValue = Default;
         Prop->DisplayName = FText::FromString(Display);
         Prop->Tooltip = FText::FromString(Tip);
         Prop->bRequiresWorldReload = false;
@@ -82,6 +85,9 @@ void UHostileScalingConfig::PostInitProperties()
     {
         UConfigPropertyFloat* Prop = NewObject<UConfigPropertyFloat>(Root, FloatClass, FName(Key));
         Prop->Value = Default;
+        // The in-game Reset button does Value = DefaultValue, so DefaultValue
+        // must be set explicitly or reset snaps to zero/minimum instead.
+        Prop->DefaultValue = Default;
         Prop->DisplayName = FText::FromString(Display);
         Prop->Tooltip = FText::FromString(Tip);
         Prop->bRequiresWorldReload = false;
