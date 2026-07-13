@@ -16,10 +16,9 @@ HostileScaling
 
 (matches the plugin folder, the C++ source folder, the uplugin, and the ConfigId.)
 
-## Short description (shown under the icon in the mod list)
+## Short description (shown under the icon in the mod list) — max 128 chars
 
-Creatures scale with your milestone tier — health, damage, spawn rate — and keep
-respawning where vanilla stops them. Fully configurable in-game, live.
+Creatures scale with your milestone tier (health, damage, spawn rate) and keep respawning where vanilla stops them.
 
 ## Full description (Markdown)
 
