@@ -44,6 +44,11 @@ struct HOSTILESCALING_API FHostileScalingConfigStruct
     UPROPERTY(BlueprintReadWrite)
     bool IncreaseSpawnCounts{true};
 
+    UPROPERTY(BlueprintReadWrite)
+    bool KeepCreaturesRespawning{true};
+    UPROPERTY(BlueprintReadWrite)
+    bool VerboseRespawnLogging{false};
+
     // Retrieves the active configuration values for this mod.
     static FHostileScalingConfigStruct GetActiveConfig(UObject* WorldContext);
 };

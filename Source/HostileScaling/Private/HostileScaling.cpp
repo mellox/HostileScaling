@@ -2,10 +2,13 @@
 #include "HostileScalingGlobals.h"
 #include "HostileScalingSubsystem.h"
 
+#include "EngineUtils.h"
 #include "Patching/NativeHookManager.h"
 #include "FGHealthComponent.h"
 #include "FGCharacterPlayer.h"
+#include "FGWaterVolume.h"
 #include "Creature/FGCreature.h"
+#include "Creature/FGCreatureSpawner.h"
 
 DEFINE_LOG_CATEGORY(LogHostileScaling);
 
@@ -38,10 +41,55 @@ namespace
 
         return (bFromHostile && bTargetApplies) ? Damage * DamageMult : Damage;
     }
+
+    // Respawn-keeper diagnostic (v1 measures, builds no correction machinery):
+    // logs a fresh creature's location and whether any streamed AFGWaterVolume
+    // encompasses it. Needs no friend access, so it lives here with its only
+    // caller. Streamed-out volumes cannot answer, which is acceptable — spawns
+    // happen near players, where the local volumes are loaded. GetSpawner()
+    // may be None for a fresh spawn (the spawner assigns itself after the
+    // spawn call); the location + verdict are the data that matter.
+    void LogCreatureSpawnWaterDiagnostic(AFGCreature* Creature)
+    {
+        UWorld* World = Creature ? Creature->GetWorld() : nullptr;
+        if (!World)
+        {
+            return;
+        }
+
+        const FVector Location = Creature->GetActorLocation();
+
+        // Deep-ocean guard (NodeShuffle "Layer 2"): the open ocean has NO
+        // streamed AFGWaterVolume at all, so volume containment alone
+        // false-negatives the worst case. -4500 was measured for
+        // NodeShuffle's node dataset (legit land bottoms out ~-3500, seabed
+        // starts ~-4900); may need recalibration for creature terrain.
+        const bool bDeepOcean = Location.Z < -4500.0f;
+        bool bInWater = bDeepOcean;
+        if (!bInWater)
+        {
+            for (TActorIterator<AFGWaterVolume> It(World); It; ++It)
+            {
+                AFGWaterVolume* Volume = *It;
+                if (IsValid(Volume) && Volume->EncompassesPoint(Location))
+                {
+                    bInWater = true;
+                    break;
+                }
+            }
+        }
+
+        UE_LOG(LogHostileScaling, Display,
+            TEXT("[Respawn] Spawn water-check: %s at (%.0f, %.0f, %.0f) inWater=%d deepOcean=%d spawner=%s"),
+            *GetNameSafe(Creature), Location.X, Location.Y, Location.Z,
+            bInWater ? 1 : 0, bDeepOcean ? 1 : 0, *GetNameSafe(Creature->GetSpawner()));
+    }
 }
 
 void FHostileScalingModule::StartupModule()
 {
+    UE_LOG(LogHostileScaling, Display, TEXT("===== HostileScaling BUILD respawn-1 2026-07-12 LOADED ====="));
+
 #if !WITH_EDITOR
     // Scale creature health the moment a creature spawns (or streams in from
     // a save). The subsystem also re-applies periodically to follow tier-ups;
@@ -52,6 +100,42 @@ void FHostileScalingModule::StartupModule()
         if (Self && Self->HasAuthority())
         {
             AHostileScalingSubsystem::ApplyCreatureHealthScale(Self);
+
+            // Respawn-keeper diagnostic: while any spawn radius is widened
+            // (and verbose logging is on), record whether new creatures land
+            // in water — measures the widened-radius risk.
+            if (HostileScaling::GVerboseRespawnLogging && HostileScaling::GWidenedSpawnRadiusCount > 0)
+            {
+                LogCreatureSpawnWaterDiagnostic(Self);
+            }
+        }
+    });
+
+    // Keep-creatures-respawning companion hook: the engine periodically
+    // recomputes each spawner's cached near-base flag; re-pin it false right
+    // after every recompute while the feature is on. TraceForNearbyBase is
+    // public, NON-virtual, non-inline and not a UFUNCTION, so the plain
+    // SUBSCRIBE variant is correct (the UOBJECT/virtual variant is only for
+    // virtuals). The protected write lives in the subsystem (friend access);
+    // this lambda only decides. Fire logging is verbose-gated and answers
+    // the re-trace-cadence question from the first instrumented build.
+    SUBSCRIBE_METHOD_AFTER(AFGCreatureSpawner::TraceForNearbyBase, [](AFGCreatureSpawner* Self)
+    {
+        if (!IsValid(Self) || !Self->HasAuthority())
+        {
+            return;
+        }
+        if (HostileScaling::GVerboseRespawnLogging)
+        {
+            UE_LOG(LogHostileScaling, Display,
+                TEXT("[Respawn] TraceForNearbyBase fired: t=%.1fs spawner=%s nearBase(after)=%d pin=%d"),
+                Self->GetWorld() ? Self->GetWorld()->GetTimeSeconds() : -1.0f,
+                *GetNameSafe(Self), Self->IsNearBase() ? 1 : 0,
+                HostileScaling::GKeepCreaturesRespawning ? 1 : 0);
+        }
+        if (HostileScaling::GKeepCreaturesRespawning)
+        {
+            AHostileScalingSubsystem::PinNearBaseFalse(Self);
         }
     });
 

@@ -6,12 +6,15 @@
 #include "HostileScalingSubsystem.generated.h"
 
 class AFGCreature;
+class AFGCreatureSpawner;
 
 // Server-side subsystem that periodically:
 //  - recomputes the global damage/health multipliers read by the damage
 //    hooks (see HostileScaling.cpp) based on config and unlocked tier,
 //  - applies health scaling to live hostile creatures (tier-ups mid-session),
-//  - rescales creature spawner respawn times and spawn counts.
+//  - rescales creature spawner respawn times and spawn counts,
+//  - keeps creatures respawning (near-base bypass, kill-slot re-arm,
+//    starvation-driven spawn radius widening) when the toggle is on.
 //
 // Original spawner values are stored in the savegame (keyed by spawner path)
 // so scaling is always computed from vanilla values and never compounds
@@ -30,6 +33,14 @@ public:
     // Called from the AFGCreature::BeginPlay hook and the periodic refresh.
     static void ApplyCreatureHealthScale(AFGCreature* Creature);
 
+    // Forces the spawner's cached near-base flag to false so vanilla stops
+    // suppressing its respawns. The write needs friend access
+    // (AccessTransformers.ini), so it lives here; called from the periodic
+    // sweep and from the TraceForNearbyBase post-hook in HostileScaling.cpp.
+    // Callers gate on the config global; authority is re-checked inside.
+    // Returns true when the flag actually flipped (was true).
+    static bool PinNearBaseFalse(AFGCreatureSpawner* Spawner);
+
     // IFGSaveInterface
     virtual bool ShouldSave_Implementation() const override { return true; }
     virtual bool NeedTransform_Implementation() override { return false; }
@@ -47,6 +58,18 @@ private:
     int32 GetHighestUnlockedTier() const;
     static float ComputeMultiplier(float Base, float PerTier, float Max, int32 Tier);
 
+    // Respawn keeper, per spawner (feature toggle already checked by caller;
+    // never called for vanilla never-respawn spawners): near-base pin,
+    // cadence-respecting kill-slot re-arm, starvation detection with
+    // stepwise spawn radius widening. Counters accumulate sweep totals.
+    void ApplyRespawnKeeperToSpawner(AFGCreatureSpawner* Spawner, const FString& Key, int32 PassedDays,
+        int32& OutSlotsReArmed, int32& OutSpawnersPinned, int32& OutRadiiWidened);
+
+    // Toggle-off / master-off transition: restore widened radii from
+    // OriginalSpawnRadii, let vanilla recompute every near-base cache via
+    // public TraceForNearbyBase(), and clear transient keeper state.
+    void RestoreVanillaRespawnBehavior();
+
     FTimerHandle RefreshTimerHandle;
 
     // Vanilla values per spawner (keyed by actor path name), persisted in the
@@ -57,5 +80,31 @@ private:
     UPROPERTY(SaveGame)
     TMap<FString, int32> OriginalSpawnCounts;
 
+    // Vanilla spawn radius per spawner, captured on first widening.
+    // mSpawnRadius itself is NOT SaveGame (resets to vanilla on load), so
+    // stored originals always equal vanilla and restoring never compounds.
+    UPROPERTY(SaveGame)
+    TMap<FString, float> OriginalSpawnRadii;
+
+    // Consecutive sweeps a spawner spent starved (some slot waiting for a
+    // spawn location). Transient by design: streaks and widened-set restart
+    // each session, radii reset to vanilla on load.
+    TMap<FString, int32> StarvationStreaks;
+
+    // Spawners widened THIS session; drives GWidenedSpawnRadiusCount.
+    TSet<FString> WidenedSpawnerPaths;
+
+    // Spawners that already logged the capped-and-still-starved notice this
+    // starvation episode (cleared when the spawner recovers) — keeps verbose
+    // streak lines from repeating forever on a permanently boxed-in spawner.
+    TSet<FString> CappedStarvedLoggedPaths;
+
+    // Detects the keeper's on->off transition (feature toggle or master
+    // switch) so vanilla behavior is restored exactly once.
+    bool bRespawnKeeperWasActive = false;
+
+    bool bLoggedNeverRespawnCount = false;
+
     int32 LastLoggedTier = -1;
+    int32 LastLoggedRespawnState = -1;
 };

@@ -141,5 +141,12 @@ void UHostileScalingConfig::PostInitProperties()
         TEXT("Increase Spawn Counts"),
         TEXT("When on, spawners also gain extra creatures (not just faster respawns) as the multiplier grows."));
 
+    AddBool(TEXT("KeepCreaturesRespawning"), true,
+        TEXT("Keep Creatures Respawning"),
+        TEXT("Keeps creature spawners active: near-base suppression is bypassed, cleared packs re-arm on the normal respawn schedule, and spawners stuck without a valid spawn spot slowly widen their search radius. Turn off to restore vanilla behavior."));
+    AddBool(TEXT("VerboseRespawnLogging"), false,
+        TEXT("Verbose Respawn Logging"),
+        TEXT("Writes detailed respawn-keeper diagnostics (per-spawner re-arms, near-base pins, radius changes, water checks) to the game log. For debugging only; leave off for clean logs."));
+
     RootSection = Root;
 }
