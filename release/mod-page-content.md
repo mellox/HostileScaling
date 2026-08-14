@@ -25,7 +25,7 @@ Hostile creatures scale with your milestone tier and keep respawning where vanil
 ```markdown
 # Hostile Scaling
 
-Make Massage-2-A-B-P fight back. As you climb the milestone tiers, hostile
+Make MASSAGE-2(A-B)b fight back. As you climb the milestone tiers, hostile
 creatures grow tougher, hit harder, and respawn faster — and they keep coming
 back even after you've industrialized half the planet, so the world never goes
 quiet.
