@@ -16,13 +16,24 @@ namespace
 {
     constexpr float RefreshIntervalSeconds = 10.0f;
 
-    // Respawn keeper: a spawner counts as starved after this many CONSECUTIVE
-    // sweeps (10s each) with a slot waiting for a spawn location. Each starved
-    // interval widens the spawn radius one step, so the engine's own location
-    // projector gets more ground to try; we never hand-place creatures.
-    constexpr int32 StarvationSweepThreshold = 3;
-    constexpr float SpawnRadiusWidenStep = 1.5f;
-    constexpr float SpawnRadiusMaxScale = 3.0f;
+    // True when this spawner's design-time creature class is HOSTILE
+    // (non-passive). Reads the class-default object, mirroring the per-instance
+    // IsHostileCreature() test the health/damage hooks use so the spawn-scaled
+    // set matches. Taming is runtime-only (spawners spawn wild) — not tested.
+    bool SpawnerIsHostile(const AFGCreatureSpawner* Spawner)
+    {
+        if (!IsValid(Spawner))
+        {
+            return false;
+        }
+        const TSubclassOf<AFGCreature> CreatureClass = Spawner->GetCreatureClass();
+        if (!CreatureClass)
+        {
+            return false;
+        }
+        const AFGCreature* CDO = CreatureClass->GetDefaultObject<AFGCreature>();
+        return CDO && !CDO->IsPassiveCreature();
+    }
 }
 
 AHostileScalingSubsystem::AHostileScalingSubsystem()
@@ -42,6 +53,24 @@ void AHostileScalingSubsystem::BeginPlay()
     HostileScaling::GKeepCreaturesRespawning = false;
     HostileScaling::GVerboseRespawnLogging = false;
     HostileScaling::GWidenedSpawnRadiusCount = 0;
+
+    // Transient per-session state, reset as ONE set. Whether this actor is
+    // re-created per world is not asserted here: clearing every transient
+    // member together is correct either way, and a half-applied reset (two of
+    // seven) would leave the rest carrying the previous world's values if it
+    // is not. SaveGame members are deliberately NOT touched.
+    RevertedPassiveSpawnerPaths.Empty();
+    SpawnScaleLoggedPaths.Empty();
+    StarvationStreaks.Empty();
+    WidenedSpawnerPaths.Empty();
+    CappedStarvedLoggedPaths.Empty();
+    bRespawnKeeperWasActive = false;
+    bLoggedNeverRespawnCount = false;
+    CensusHighWaterHostile = 0;
+    CensusHighWaterPassive = 0;
+    CensusHighWaterNullClass = 0;
+    LastLoggedTier = -1;
+    LastLoggedRespawnState = -1;
 
     // All scaling is server-authoritative; clients receive results via replication.
     if (!HasAuthority())
@@ -111,6 +140,18 @@ bool AHostileScalingSubsystem::PinNearBaseFalse(AFGCreatureSpawner* Spawner)
     // Callers gate on config/globals; authority re-checked so no call path
     // (sweep or hook) can ever write on a client.
     if (!IsValid(Spawner) || !Spawner->HasAuthority())
+    {
+        return false;
+    }
+
+    // Near-base bypass is HOSTILE-only. The TraceForNearbyBase post-hook
+    // (HostileScaling.cpp) calls this for every spawner it sees, with no
+    // per-spawner hostility filter, so enforce it HERE — the single choke point
+    // that writes mCachedIsNearBase — or the hook would re-pin passive spawners
+    // (including ones the migration revert just re-traced) whenever the keeper is
+    // on. The sweep's own path already only reaches hostile spawners, so this is
+    // a no-op there.
+    if (!SpawnerIsHostile(Spawner))
     {
         return false;
     }
@@ -236,6 +277,17 @@ void AHostileScalingSubsystem::RefreshScaling()
     int32 SpawnersSeen = 0, NeverRespawnSeen = 0, SlotsReArmed = 0;
     int32 SpawnersPinned = 0, RadiiWidened = 0;
 
+    // Hostile-only gate + migration-revert census counters (this sweep).
+    int32 HostileSpawners = 0, PassiveSpawners = 0, NullClassSpawners = 0;
+    int32 PassiveSlotsTrimmed = 0, PassiveSpawnersTrimmed = 0, PassiveReTraced = 0;
+
+    // Hostile shrink census (this sweep), symmetric to the passive one. Without
+    // it, convergence back toward the recorded vanilla count after the spawn
+    // multiplier is lowered is invisible in the log. Note the shrink loop it
+    // counts lives inside the IncreaseSpawnCounts block, so these stay 0 while
+    // that toggle is off — that is the code path, not an absence of residue.
+    int32 HostileSlotsTrimmed = 0, HostileSpawnersTrimmed = 0;
+
     // ---- Spawner scaling: recompute from stored vanilla values. ---------
     // Applied idempotently every refresh: the game can regenerate spawn data
     // at runtime (AFGCreatureSpawner::PopulateSpawnData), so we converge back
@@ -249,6 +301,39 @@ void AHostileScalingSubsystem::RefreshScaling()
         }
 
         const FString Key = Spawner->GetPathName();
+
+        // Hostile-only gate: spawn scaling (respawn frequency + counts) and the
+        // respawn keeper apply ONLY to spawners whose creature class is hostile,
+        // matching the per-instance IsHostileCreature() filter the health/damage
+        // hooks use. Passive/neutral (and null-class) spawners are left vanilla.
+        const bool bHostile = SpawnerIsHostile(Spawner);
+        const bool bNullClass = !Spawner->GetCreatureClass();
+        if (HostileScaling::GVerboseRespawnLogging && !SpawnScaleLoggedPaths.Contains(Key))
+        {
+            UE_LOG(LogHostileScaling, Display, TEXT("[SpawnScale] Spawner=%s class=%s hostile=%d"),
+                *GetNameSafe(Spawner), *GetNameSafe(Spawner->GetCreatureClass().Get()),
+                bHostile ? 1 : 0);
+            SpawnScaleLoggedPaths.Add(Key);
+        }
+        if (!bHostile)
+        {
+            // Passive/neutral or null class: no scaling, no keeper. The near-base
+            // pin is blocked for these spawners at the PinNearBaseFalse choke
+            // point; the v1.1.0 residue already in the save (grown spawn counts +
+            // a pinned near-base flag, both SaveGame) is walked back by
+            // RevertPassiveSpawnerResidue (HostileScalingPassiveRevert.cpp).
+            if (bNullClass)
+            {
+                ++NullClassSpawners;
+            }
+            else
+            {
+                ++PassiveSpawners;
+            }
+            RevertPassiveSpawnerResidue(Spawner, Key, PassiveSlotsTrimmed, PassiveSpawnersTrimmed, PassiveReTraced);
+            continue;
+        }
+        ++HostileSpawners;
 
         // Respawn frequency: divide the vanilla respawn time (in in-game
         // days, integer) by the multiplier. 2x multiplier = respawns roughly
@@ -294,14 +379,33 @@ void AHostileScalingSubsystem::RefreshScaling()
                     Spawner->mSpawnData.Add(Copy);
                 }
 
+                int32 SlotsTrimmedHere = 0;
                 while (Spawner->mSpawnData.Num() > FMath::Max(TargetCount, VanillaCount))
                 {
+                    // Same in-flight guard as the passive trim: a slot waiting on
+                    // a projected spawn location has no Creature yet, so the
+                    // live-creature test alone would let us remove it.
                     const int32 LastIdx = Spawner->mSpawnData.Num() - 1;
-                    if (Spawner->mSpawnData[LastIdx].Creature != nullptr)
+                    if (Spawner->mSpawnData[LastIdx].Creature != nullptr
+                        || Spawner->mSpawnData[LastIdx].WaitingForSpawnLocation)
                     {
                         break;
                     }
                     Spawner->mSpawnData.RemoveAt(LastIdx);
+                    ++SlotsTrimmedHere;
+                }
+                HostileSlotsTrimmed += SlotsTrimmedHere;
+                if (SlotsTrimmedHere > 0)
+                {
+                    ++HostileSpawnersTrimmed;
+                    // Mirrors the passive trim line (PassiveRevert.cpp): mSpawnData is
+                    // SaveGame, so a wrong hostile trim persists too. Measured
+                    // before/after plus the targets actually used; no cause inferred.
+                    UE_LOG(LogHostileScaling, Display,
+                        TEXT("[SpawnScale] Hostile trim on %s: removed %d slot(s), %d -> %d, target %d, recorded original %d"),
+                        *GetNameSafe(Spawner), SlotsTrimmedHere,
+                        Spawner->mSpawnData.Num() + SlotsTrimmedHere, Spawner->mSpawnData.Num(),
+                        TargetCount, VanillaCount);
                 }
             }
         }
@@ -326,6 +430,44 @@ void AHostileScalingSubsystem::RefreshScaling()
         }
     }
 
+    // ---- Hostile-only gate + migration-revert diagnostics. ---------------
+    // Ungated by verbose: with verbose off there would otherwise be no evidence
+    // in the log that the gate is live, or that anything was trimmed.
+    // Classification counts describe the spawners this sweep iterated.
+    // Classification census: re-log whenever a bucket exceeds its previous
+    // high-water mark, so the line ends up describing the LARGEST spawner set
+    // actually iterated rather than whatever had streamed in 2 s after load.
+    // Each re-log requires a strictly larger count, so this converges to silence.
+    if (HostileSpawners > CensusHighWaterHostile
+        || PassiveSpawners > CensusHighWaterPassive
+        || NullClassSpawners > CensusHighWaterNullClass)
+    {
+        CensusHighWaterHostile   = FMath::Max(CensusHighWaterHostile,   HostileSpawners);
+        CensusHighWaterPassive   = FMath::Max(CensusHighWaterPassive,   PassiveSpawners);
+        CensusHighWaterNullClass = FMath::Max(CensusHighWaterNullClass, NullClassSpawners);
+        UE_LOG(LogHostileScaling, Display,
+            TEXT("[SpawnScale] Classification census (loaded spawners this sweep): hostile %d, passive %d, nullClass %d"),
+            HostileSpawners, PassiveSpawners, NullClassSpawners);
+    }
+
+    // Migration revert: measured outcome only. Prints only on sweeps that
+    // changed something, so a settled world stays silent.
+    if (PassiveSlotsTrimmed > 0 || PassiveReTraced > 0)
+    {
+        UE_LOG(LogHostileScaling, Display,
+            TEXT("[SpawnScale] Passive revert this sweep: trimmed %d slot(s) across %d spawner(s), re-traced near-base on %d spawner(s)"),
+            PassiveSlotsTrimmed, PassiveSpawnersTrimmed, PassiveReTraced);
+    }
+
+    // Hostile shrink: same shape, same gating. Measured counts from this sweep
+    // only; nothing is inferred about why the target dropped.
+    if (HostileSlotsTrimmed > 0)
+    {
+        UE_LOG(LogHostileScaling, Display,
+            TEXT("[SpawnScale] Hostile trim this sweep: trimmed %d slot(s) across %d spawner(s)"),
+            HostileSlotsTrimmed, HostileSpawnersTrimmed);
+    }
+
     // ---- Respawn keeper sweep diagnostics. -------------------------------
     if (bRespawnKeeperActive)
     {
@@ -334,7 +476,7 @@ void AHostileScalingSubsystem::RefreshScaling()
         if (!bLoggedNeverRespawnCount && SpawnersSeen > 0)
         {
             UE_LOG(LogHostileScaling, Display,
-                TEXT("[Respawn] Spawner census: %d of %d loaded spawners are vanilla never-respawn (-1); the keeper leaves those untouched"), NeverRespawnSeen, SpawnersSeen);
+                TEXT("[Respawn] Spawner census: %d of %d loaded HOSTILE spawners are vanilla never-respawn (-1); the keeper leaves those untouched"), NeverRespawnSeen, SpawnersSeen);
             bLoggedNeverRespawnCount = true;
         }
 
@@ -342,158 +484,11 @@ void AHostileScalingSubsystem::RefreshScaling()
         if (HostileScaling::GVerboseRespawnLogging && SlotsReArmed + SpawnersPinned + RadiiWidened > 0)
         {
             UE_LOG(LogHostileScaling, Display,
-                TEXT("[Respawn] Sweep totals: %d slot(s) re-armed, %d spawner(s) near-base-pinned, %d spawn radius(es) widened (day %d, %d spawners)"), SlotsReArmed, SpawnersPinned, RadiiWidened, PassedDays, SpawnersSeen);
+                TEXT("[Respawn] Sweep totals: %d slot(s) re-armed, %d spawner(s) near-base-pinned, %d spawn radius(es) widened (day %d, %d hostile spawners)"), SlotsReArmed, SpawnersPinned, RadiiWidened, PassedDays, SpawnersSeen);
         }
     }
 }
 
-void AHostileScalingSubsystem::ApplyRespawnKeeperToSpawner(AFGCreatureSpawner* Spawner, const FString& Key,
-    int32 PassedDays, int32& OutSlotsReArmed, int32& OutSpawnersPinned, int32& OutRadiiWidened)
-{
-    const bool bVerbose = HostileScaling::GVerboseRespawnLogging;
-
-    // (1) Near-base bypass: pin the cached flag false. The engine's own
-    // periodic TraceForNearbyBase would flip it back — the post-hook in
-    // HostileScaling.cpp re-pins immediately after each vanilla re-trace.
-    if (PinNearBaseFalse(Spawner))
-    {
-        ++OutSpawnersPinned;
-    }
-
-    // (2) Cadence-respecting slot re-arm: only slots whose killed-creature
-    // deadline has passed, measured against the ALREADY-SCALED respawn time,
-    // so the existing frequency config keeps governing pace. Writing the
-    // vanilla post-respawn state (WasKilled=false, NumTimesKilled=0,
-    // KilledOnDayNr=-1) is save-legal; the alive-creature guard prevents
-    // duplicates. Deliberately NO PopulateSpawnData() in v1 — it can
-    // regenerate the array under our count scaling (in-game must-test).
-    bool bAnyWaiting = false;
-    for (int32 SlotIdx = 0; SlotIdx < Spawner->mSpawnData.Num(); ++SlotIdx)
-    {
-        FSpawnData& Slot = Spawner->mSpawnData[SlotIdx];
-        bAnyWaiting |= Slot.WaitingForSpawnLocation;
-
-        if (PassedDays >= 0
-            && Slot.WasKilled && !IsValid(Slot.Creature) && Slot.KilledOnDayNr >= 0
-            && (PassedDays - Slot.KilledOnDayNr) >= FMath::Max(0, Spawner->mRespawnTimeIndays))
-        {
-            if (bVerbose)
-            {
-                UE_LOG(LogHostileScaling, Display,
-                    TEXT("[Respawn] Re-armed slot %d/%d on %s: WasKilled true -> false, KilledOnDayNr %d -> -1, NumTimesKilled %d -> 0 (day %d, respawnDays %d)"),
-                    SlotIdx + 1, Spawner->mSpawnData.Num(), *GetNameSafe(Spawner), Slot.KilledOnDayNr, Slot.NumTimesKilled, PassedDays, Spawner->mRespawnTimeIndays);
-            }
-            Slot.WasKilled = false;
-            Slot.NumTimesKilled = 0;
-            Slot.KilledOnDayNr = -1;
-            ++OutSlotsReArmed;
-        }
-    }
-
-    // (3) Starvation detector, driven purely by the engine's own can't-place
-    // signal: any slot stuck WaitingForSpawnLocation counts the sweep as
-    // starved; the streak resets only when NO slot is waiting. Live creatures
-    // elsewhere in the pack deliberately do NOT reset it — a partially
-    // blocked pack must still widen. Widening is per-spawner because the
-    // radius is the only lever the engine exposes (FSpawnData has no per-slot
-    // location); it is stepwise and capped, originals captured before the
-    // first step and restored on toggle-off.
-    if (!bAnyWaiting)
-    {
-        StarvationStreaks.Remove(Key);
-        CappedStarvedLoggedPaths.Remove(Key);
-        return;
-    }
-
-    int32& Streak = StarvationStreaks.FindOrAdd(Key);
-    ++Streak;
-    if (bVerbose && !CappedStarvedLoggedPaths.Contains(Key))
-    {
-        UE_LOG(LogHostileScaling, Display,
-            TEXT("[Respawn] Starvation streak %d/%d on %s (slot waiting for spawn location)"),
-            Streak, StarvationSweepThreshold, *GetNameSafe(Spawner));
-    }
-    if (Streak < StarvationSweepThreshold)
-    {
-        return;
-    }
-    Streak = 0;
-
-    const float VanillaRadius = OriginalSpawnRadii.Contains(Key)
-        ? OriginalSpawnRadii[Key]
-        : OriginalSpawnRadii.Add(Key, Spawner->mSpawnRadius);
-    const float RadiusCap = VanillaRadius * SpawnRadiusMaxScale;
-    if (Spawner->mSpawnRadius + KINDA_SMALL_NUMBER >= RadiusCap)
-    {
-        // Capped and still starved is not actionable: log once per starvation
-        // episode, then go quiet (a permanently boxed-in spawner would
-        // otherwise repeat streak lines forever). Cleared on recovery above.
-        if (bVerbose && !CappedStarvedLoggedPaths.Contains(Key))
-        {
-            UE_LOG(LogHostileScaling, Display,
-                TEXT("[Respawn] Spawn radius capped (x%.1f) and still starved on %s; going quiet until it recovers"),
-                SpawnRadiusMaxScale, *GetNameSafe(Spawner));
-            CappedStarvedLoggedPaths.Add(Key);
-        }
-        return;
-    }
-
-    const float Before = Spawner->mSpawnRadius;
-    Spawner->mSpawnRadius = FMath::Min(Before * SpawnRadiusWidenStep, RadiusCap);
-    WidenedSpawnerPaths.Add(Key);
-    HostileScaling::GWidenedSpawnRadiusCount = WidenedSpawnerPaths.Num();
-    ++OutRadiiWidened;
-    if (bVerbose)
-    {
-        UE_LOG(LogHostileScaling, Display,
-            TEXT("[Respawn] Widened spawn radius on %s: %.0f -> %.0f (vanilla %.0f, cap x%.1f)"),
-            *GetNameSafe(Spawner), Before, Spawner->mSpawnRadius, VanillaRadius, SpawnRadiusMaxScale);
-    }
-}
-
-void AHostileScalingSubsystem::RestoreVanillaRespawnBehavior()
-{
-    const bool bVerbose = HostileScaling::GVerboseRespawnLogging;
-    int32 RadiiRestored = 0;
-    int32 SpawnersReTraced = 0;
-
-    for (TActorIterator<AFGCreatureSpawner> It(GetWorld()); It; ++It)
-    {
-        AFGCreatureSpawner* Spawner = *It;
-        if (!IsValid(Spawner))
-        {
-            continue;
-        }
-
-        if (const float* VanillaRadius = OriginalSpawnRadii.Find(Spawner->GetPathName()))
-        {
-            if (!FMath::IsNearlyEqual(Spawner->mSpawnRadius, *VanillaRadius))
-            {
-                if (bVerbose)
-                {
-                    UE_LOG(LogHostileScaling, Display,
-                        TEXT("[Respawn] Restored spawn radius on %s: %.0f -> %.0f"),
-                        *GetNameSafe(Spawner), Spawner->mSpawnRadius, *VanillaRadius);
-                }
-                Spawner->mSpawnRadius = *VanillaRadius;
-                ++RadiiRestored;
-            }
-        }
-
-        // Vanilla recomputes the near-base cache honestly. The globals were
-        // published (false) before this runs, so the TraceForNearbyBase
-        // post-hook will NOT re-pin during these calls. Only loaded spawners
-        // are reached; streamed-out ones self-heal when the game re-traces
-        // them after streaming in.
-        Spawner->TraceForNearbyBase();
-        ++SpawnersReTraced;
-    }
-
-    StarvationStreaks.Empty();
-    WidenedSpawnerPaths.Empty();
-    CappedStarvedLoggedPaths.Empty();
-    HostileScaling::GWidenedSpawnRadiusCount = 0;
-
-    UE_LOG(LogHostileScaling, Display,
-        TEXT("[Respawn] Keeper OFF: restored %d widened spawn radius(es), re-traced near-base on %d loaded spawner(s)"), RadiiRestored, SpawnersReTraced);
-}
+// ApplyRespawnKeeperToSpawner() and RestoreVanillaRespawnBehavior() are defined in
+// HostileScalingRespawnKeeper.cpp; RevertPassiveSpawnerResidue() in
+// HostileScalingPassiveRevert.cpp (split out to keep this file under 500 lines).

@@ -18,7 +18,7 @@ HostileScaling
 
 ## Short description (shown under the icon in the mod list) — max 128 chars
 
-Creatures scale with your milestone tier (health, damage, spawn rate) and keep respawning where vanilla stops them.
+Hostile creatures scale with your milestone tier and keep respawning where vanilla stops them. Passive wildlife is untouched.
 
 ## Full description (Markdown)
 
@@ -36,16 +36,20 @@ quiet.
   (health-display mods show the true numbers)
 - **Damage scaling** — creature attacks hit harder (melee, projectile, and
   explosion damage all covered)
-- **Spawn scaling** — faster respawns and denser packs
-- **Keep creatures respawning** *(new, on by default)* — vanilla stops
+- **Spawn scaling** — faster respawns and denser packs, on hostile spawners only
+- **Respawn near factories** *(on by default)* — vanilla stops
   respawning creatures near your base and in areas you've cleared out; this keeps
-  spawners active so the planet stays dangerous. Cleared packs come back on their
+  **hostile** spawners active so the planet stays dangerous. Cleared packs come back on their
   normal (scaled) schedule, and a spawner you've built over widens its search
-  radius to find valid ground nearby. Toggle it off for vanilla behavior.
+  radius to find valid ground nearby. Passive wildlife keeps vanilla behavior.
+  Toggle it off for vanilla behavior everywhere.
 - **Tier progression** — every multiplier is `Base + PerTier × your highest
   unlocked milestone tier`, with a configurable cap
 
-Lizard doggos, tamed creatures, and passive fauna are never affected.
+Lizard doggos, tamed creatures, and passive fauna are never scaled — no extra health, no
+extra damage, no faster respawns, no bigger packs. The one exception is a one-time cleanup:
+on saves made by v1.1.0 or earlier, the mod walks passive packs back to the size it first
+recorded and hands their near-base flag back to the game (see the changelog below).
 
 ## Configuration
 
@@ -56,12 +60,12 @@ pause menu) and applies to a running game within ~10 seconds — no restart need
 |---|---|
 | Health / Damage base multiplier | 1.0 (vanilla at tier 0) |
 | Health / Damage added per tier | +15% per tier |
-| Spawn rate added per tier | +10% per tier |
-| Maximum multiplier caps | 5× health/damage, 4× spawns |
-| Scale damage to buildings | off |
-| Increase spawn counts | on |
-| Keep creatures respawning | on |
-| Verbose respawn logging (debugging) | off |
+| Respawn + Packs: Added Per Tier | +10% per tier |
+| Maximum multiplier caps | 5× health/damage, 4× respawn speed + pack size |
+| Damage also applies to buildings | off |
+| Also apply spawn scaling to pack size | on |
+| Respawn near factories | on |
+| Verbose respawn logging (troubleshooting) | off |
 
 With defaults, by tier 9 hostiles have ~2.35× health and damage and ~1.9× spawn
 rate. Crank the per-tier values and caps for a true nightmare planet.
@@ -86,27 +90,38 @@ Report issues on the mod's GitHub issues page (link on this page) or ping me on
 the Satisfactory Modding Discord.
 ```
 
-## Changelog for this version (v1.1.0) — paste into the SMR version-upload form
+## Changelog for this version (v1.1.1) — paste into the SMR version-upload form
 
 ```
-New: Keep Creatures Respawning (on by default). Vanilla stops respawning creatures
-near your base and in cleared-out areas; this keeps spawners active. Cleared packs
-re-arm on their normal (scaled) schedule, near-base suppression is bypassed, and a
-spawner you've built over widens its search radius to find valid ground nearby.
-Server-side and fully reversible — turn it off for vanilla behavior.
+Changed: spawn scaling and the respawn keeper are now HOSTILE-only. Through v1.1.0 the
+mod scaled every creature spawner, passive ones included, so doggo and ambient-fauna
+packs grew and kept respawning near your base. Health and damage scaling were always
+hostile-only; the spawner side now matches.
 
-New: Verbose Respawn Logging (off by default) — a debugging toggle for detailed
-respawn diagnostics in the game log.
+Migration: on saves made by v1.1.0 or earlier, passive spawners are walked back —
+creature-less extra pack slots are removed until the pack is back at the size recorded
+when the mod first saw the spawner, and the near-base flag is handed back to the game.
+With the master Enabled switch off, nothing is reverted.
 
-Fix: map-defined "never respawn" spawners were respawning daily due to a scaling
-bug present since v1.0.1; they now correctly stay disabled once cleared.
+Fixed: the near-base bypass no longer touches passive spawners at all. It is refused at
+the single point that writes the flag, so passive wildlife keeps vanilla's near-base
+suppression even while the feature is on.
+
+Changed: config panel clarity pass. The three spawn sliders are labelled "Respawn + Packs"
+because they always drive both, "Increase Spawn Counts" is now "Also Apply
+Spawn Scaling to Pack Size", and "Keep Creatures Respawning" is now "Respawn Near
+Factories". Setting values and saved configs are unchanged.
+
+Added: log diagnostics for the hostile/passive split and the passive migration, so a
+support log shows what was classified and what was trimmed.
 
 Respawn technique inspired by Blood Moon (Chris Cavalluzzi) as prior art; no code copied.
 ```
 
 ## Compatibility info to set after upload
 
-- Stable branch: **Works** (built and in-game tested on 1.1.x, July 2026)
+- Stable branch: set **Works** only after the v1.1.1 runtime checklist passes in-game on the
+  current game build; the last recorded in-game test is v1.1.x, July 2026
 - Experimental: untested — set "Works" only if tested, else leave unknown
 
 ## Form fields

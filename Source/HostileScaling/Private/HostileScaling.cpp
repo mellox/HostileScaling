@@ -88,7 +88,7 @@ namespace
 
 void FHostileScalingModule::StartupModule()
 {
-    UE_LOG(LogHostileScaling, Display, TEXT("===== HostileScaling BUILD respawn-1 2026-07-12 LOADED ====="));
+    UE_LOG(LogHostileScaling, Display, TEXT("===== HostileScaling BUILD v1.1.1-rc3 2026-08-13 LOADED ====="));
 
 #if !WITH_EDITOR
     // Scale creature health the moment a creature spawns (or streams in from
@@ -125,17 +125,22 @@ void FHostileScalingModule::StartupModule()
         {
             return;
         }
+        // Read the engine's freshly-traced value BEFORE our pin can overwrite
+        // it, then pin, then log: nearBaseAfterTrace is what the engine
+        // computed and pinnedByUs is the measured outcome of our own call
+        // (PinNearBaseFalse vetoes passive spawners, so the keeper global alone
+        // would assert a pin that never happened). PinNearBaseFalse re-checks
+        // validity and authority internally, so hoisting it is safe.
+        const bool bNearBaseFromTrace = Self->IsNearBase();
+        const bool bKeeperOn = HostileScaling::GKeepCreaturesRespawning;
+        const bool bPinned = bKeeperOn && AHostileScalingSubsystem::PinNearBaseFalse(Self);
         if (HostileScaling::GVerboseRespawnLogging)
         {
             UE_LOG(LogHostileScaling, Display,
-                TEXT("[Respawn] TraceForNearbyBase fired: t=%.1fs spawner=%s nearBase(after)=%d pin=%d"),
+                TEXT("[Respawn] TraceForNearbyBase fired: t=%.1fs spawner=%s nearBaseAfterTrace=%d keeperOn=%d pinnedByUs=%d"),
                 Self->GetWorld() ? Self->GetWorld()->GetTimeSeconds() : -1.0f,
-                *GetNameSafe(Self), Self->IsNearBase() ? 1 : 0,
-                HostileScaling::GKeepCreaturesRespawning ? 1 : 0);
-        }
-        if (HostileScaling::GKeepCreaturesRespawning)
-        {
-            AHostileScalingSubsystem::PinNearBaseFalse(Self);
+                *GetNameSafe(Self), bNearBaseFromTrace ? 1 : 0,
+                bKeeperOn ? 1 : 0, bPinned ? 1 : 0);
         }
     });
 

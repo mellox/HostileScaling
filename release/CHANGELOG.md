@@ -4,6 +4,48 @@ All notable changes to this mod. Follows semantic versioning; the `.uplugin`
 integer `Version` stays `1` (SemVer major) across all 1.x releases — only
 `VersionName`/`SemVersion` change.
 
+## v1.1.1
+
+**Changed — scaling and the respawn keeper are now HOSTILE-only.** Through v1.1.0 the mod scaled
+every creature spawner, passive ones included, so doggo and ambient-fauna packs grew and kept
+respawning near your base. Health and damage scaling were always hostile-only; the spawner side now
+matches.
+
+- A spawner counts as hostile when its creature class's default object is not passive.
+- Passive spawners are left at vanilla respawn time, vanilla pack size, and vanilla near-base
+  suppression.
+- **Migration:** on saves made by v1.1.0 or earlier, passive spawners are walked back — creature-less
+  extra pack slots are removed until the pack is back at the size recorded when the mod first saw the
+  spawner (never below it, never on a spawner whose recorded size is 0, and never a slot the game is
+  mid-spawn on), and the near-base flag is handed back to the game to recompute.
+- With the master **Enabled** switch off, nothing is reverted — that residue stays until you turn it
+  back on.
+
+**Fix — the near-base bypass is refused for passive spawners at the point that writes the flag,**
+not merely skipped by the sweep, so passive wildlife keeps vanilla's near-base suppression even
+while **Respawn Near Factories** is on.
+
+**Changed — config panel clarity pass.** No setting value or saved config changes; labels and
+descriptions only.
+
+- The three spawn sliders are now labelled **Respawn + Packs**, because that one
+  multiplier has always driven both.
+- **Increase Spawn Counts** is now **Also Apply Spawn Scaling to Pack Size**, sitting directly under
+  the sliders it gates.
+- **Keep Creatures Respawning** is now **Respawn Near Factories**.
+- Descriptions state the direction of the multiplier (1x = vanilla, 2x = half the vanilla wait,
+  0.5x = twice the vanilla wait), and all three sliders carry a warning that large values produce
+  very large packs while the pack-size toggle is on.
+- **Verbose Respawn Logging** is grouped under Diagnostics and marked troubleshooting-only.
+
+**Added — diagnostics.** The log now carries a hostile/passive/unclassified spawner census, a
+per-spawner line naming any passive pack that was trimmed (with before, after, and the recorded
+original), and per-sweep totals for both the passive migration and hostile pack shrinkage — so a
+support log shows what the classification gate did without turning verbose logging on.
+
+_Respawn-keeper technique inspired by **Blood Moon** by Chris Cavalluzzi as prior art; no
+code was copied — this implementation is independent._
+
 ## v1.1.0
 
 **New — Keep Creatures Respawning (on by default).** Vanilla Satisfactory stops

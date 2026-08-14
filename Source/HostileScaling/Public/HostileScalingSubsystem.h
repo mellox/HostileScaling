@@ -65,6 +65,15 @@ private:
     void ApplyRespawnKeeperToSpawner(AFGCreatureSpawner* Spawner, const FString& Key, int32 PassedDays,
         int32& OutSlotsReArmed, int32& OutSpawnersPinned, int32& OutRadiiWidened);
 
+    // Passive/neutral spawner migration revert (defined in
+    // HostileScalingPassiveRevert.cpp): trim spawn-count residue an earlier
+    // version grew, and hand a pinned near-base flag back to vanilla. Caller
+    // guarantees the spawner is valid and classified non-hostile. Counters
+    // accumulate sweep totals; OutReTraced is also the per-sweep re-trace
+    // budget this function reads.
+    void RevertPassiveSpawnerResidue(AFGCreatureSpawner* Spawner, const FString& Key,
+        int32& OutSlotsTrimmed, int32& OutSpawnersTrimmed, int32& OutReTraced);
+
     // Toggle-off / master-off transition: restore widened radii from
     // OriginalSpawnRadii, let vanilla recompute every near-base cache via
     // public TraceForNearbyBase(), and clear transient keeper state.
@@ -99,11 +108,30 @@ private:
     // streak lines from repeating forever on a permanently boxed-in spawner.
     TSet<FString> CappedStarvedLoggedPaths;
 
+    // Passive/neutral spawners whose v1.1.0 near-base pin has been handed back
+    // to vanilla (one explicit TraceForNearbyBase) this session. Transient, so
+    // the re-trace runs once per spawner per session. mCachedIsNearBase is
+    // SaveGame: a spawner that streams out and back in before the next save
+    // reloads the pinned value and is not re-traced by us again — it relies on
+    // vanilla's own periodic re-trace. Spawn-count trimming is NOT gated on
+    // this set; it re-converges every sweep.
+    TSet<FString> RevertedPassiveSpawnerPaths;
+
+    // Spawners whose hostile/passive classification was already logged (verbose)
+    // so the per-spawner [SpawnScale] line prints once each, not every sweep.
+    TSet<FString> SpawnScaleLoggedPaths;
+
     // Detects the keeper's on->off transition (feature toggle or master
     // switch) so vanilla behavior is restored exactly once.
     bool bRespawnKeeperWasActive = false;
 
     bool bLoggedNeverRespawnCount = false;
+
+    // High-water marks for the classification census, so the census describes the
+    // largest spawner set seen this session rather than the first one.
+    int32 CensusHighWaterHostile = 0;
+    int32 CensusHighWaterPassive = 0;
+    int32 CensusHighWaterNullClass = 0;
 
     int32 LastLoggedTier = -1;
     int32 LastLoggedRespawnState = -1;

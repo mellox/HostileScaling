@@ -11,8 +11,8 @@ tiers. Everything is user-configurable through the in-game Mod Config menu.
 | Health | Hostile creatures get real scaled health: max health is set to `vanilla class default × multiplier` (current health percentage preserved), applied instantly on spawn via an `AFGCreature::BeginPlay` hook and reconciled every 10s for live creatures on tier-ups. Computing from the class default makes it idempotent — values never compound across saves. Health-display mods show the true scaled numbers. |
 | Damage | Damage dealt **by** hostile creatures is multiplied. Hostile = any `AFGCreature` that is neither passive nor tamed (doggos and ambient fauna untouched), checked per instance so it works for every creature blueprint. By default only damage to players is scaled; a config toggle extends it to buildings/vehicles. |
 | Damage paths | All three `UFGHealthComponent` entry points are hooked (`TakeDamage`, `TakePointDamage`, `TakeRadialDamage`) so melee, projectile/hitscan, and explosion damage are all covered. |
-| Spawn frequency | The subsystem divides each spawner's respawn time (in in-game days) by the multiplier, and optionally grows each spawner's spawn list so more creatures appear per location. |
-| Keep respawning | Vanilla suppresses spawners near your base and eventually stops repopulating cleared areas, so the world empties out as you build. With **Keep Creatures Respawning** on (default), the mod bypasses near-base suppression, re-arms cleared packs on their normal (already-scaled) respawn schedule, and — if a spawner can't find a valid spot (e.g. you floored over it) — gradually widens its search radius so creatures reappear nearby. Toggle it off for vanilla behavior. |
+| Spawn frequency | The subsystem divides each **hostile** spawner's respawn time (in in-game days) by the multiplier, and optionally grows that spawner's spawn list so more creatures appear per location. A spawner counts as hostile when its creature class's default object is not passive — passive spawners (doggos, ambient fauna) are left at vanilla respawn time, and their pack size is returned to the size the mod recorded the first time it saw the spawner. |
+| Keep respawning | Vanilla suppresses spawners near your base and eventually stops repopulating cleared areas, so the world empties out as you build. With **Respawn Near Factories** on (default), the mod bypasses near-base suppression **on hostile spawners**, re-arms their cleared packs on their normal (already-scaled) respawn schedule, and — if such a spawner can't find a valid spot (e.g. you floored over it) — gradually widens its search radius so creatures reappear nearby. Passive spawners keep vanilla near-base suppression. Toggle it off for vanilla behavior everywhere. |
 | Tier progression | Highest unlocked **milestone** tier is read from the schematic manager. Each multiplier = `Base + PerTier × Tier`, clamped to `[0.1, Max]`. |
 
 Original spawner values are stored **in the savegame** (keyed by spawner path), so scaling is
@@ -23,7 +23,7 @@ the mod installed on the host/server.
 ### Default configuration
 
 With defaults (`PerTier` 0.15/0.15/0.10), at tier 9 hostiles have ~2.35× health, deal ~2.35×
-damage, and spawners refill ~1.9× faster. **Keep Creatures Respawning** is on by default;
+damage, and spawners refill ~1.9× faster. **Respawn Near Factories** is on by default;
 **Verbose Respawn Logging** (a debugging aid that writes per-spawner detail to the game log)
 is off. Config file is written to `<game>/FactoryGame/Configs/HostileScaling.cfg`; the same
 values are editable in-game under **Main Menu → Mods → Hostile Scaling** (SML's Mod Config UI).
@@ -78,13 +78,19 @@ and `AFGCreatureSpawner`; invalid entries show up as errors in the build log.
 - Creatures alive at the moment of a tier-up keep their old health scale until they
   die and respawn. Damage and spawn scaling update within ~10 seconds.
 - Spawn-count growth reuses existing spawn locations, so packs get denser rather than wider.
-- **Keep Creatures Respawning** only writes vanilla-legal spawner state (the same values a
+- **Respawn Near Factories** only writes vanilla-legal spawner state (the same values a
   natural respawn produces), so it never corrupts a save and is fully reversible — toggle it
   off and the game re-suppresses spawners near your base within one re-trace cycle. All of its
   work is server-side, so multiplayer only needs the mod on the host/server.
 - Spawners flagged **never-respawn** in the map data (rare) stay never-respawn. Through v1.0.3
   a spawn-scaling bug clamped these to a 0-day respawn, making them respawn daily; v1.1.0
   restores their intended behavior (see the changelog).
+- Versions up to v1.1.0 scaled **every** spawner, passive ones included. This version scales
+  hostile spawners only and, on saves made by those versions, walks passive spawners back:
+  creature-less extra pack slots are removed until the pack is back at the size recorded when the
+  spawner was first seen (never below it, and never on a spawner whose recorded size is 0), and the
+  near-base flag is handed back to the game to recompute. With the master **Enabled** switch off the
+  mod touches nothing, so that residue is left as-is until it is turned back on.
 - The mod never edits creature assets, so removing the mod cleanly reverts everything except
   the (harmless) extra entries it stored in its own savegame data.
 - Works alongside `MoreEnemySpawns`/`BloodMoon`, but multipliers stack with whatever those
