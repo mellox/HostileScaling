@@ -31,9 +31,13 @@
 #  A2 after a successful run: this run's UAT log must hold the header-tool lines for every target built.
 #  A3 the deployed DLL must carry the class-qualified native-thunk export for every UFUNCTION declared
 #     on an exported class in the mod's headers (derived, never hard-coded).
+#  A4 (packet mcp3) every object file the linker response file lists for this mod's module DLL(s),
+#     per target built, must be written in this run, and there must be at least one (a hybrid DLL
+#     linked from a stale object passed A2/A3 in UrDead on 2026-11-10).
 # Exit codes added here: 30 child exit code unreadable, 31 child threw, 32 header-tool log gate,
 # 33 thunk gate, 34 header mtime update failed or a stamp not older than it, 35 liveLatencySeconds pin,
-# 36 -KeepWeaponUpgrades given while WeaponUpgrades.uplugin.disabled_for_build exists.
+# 36 -KeepWeaponUpgrades given while WeaponUpgrades.uplugin.disabled_for_build exists,
+# 37 object-freshness gate (precedence among gates: 33, then 37, then 32).
 # Every other code is the child's.
 
 param(
@@ -194,13 +198,67 @@ function Test-Thunks($RunStart) {
     return $ok
 }
 
+# ---- A4: every object LINKED into this mod's DLL(s) was written in this run ----------------
+# Link inputs are read from UBT's linker response file <t>-<Module>-Win64-Shipping.dll.rsp, not from a
+# directory glob: the rsp lists the .obj inputs of UBT's link action for this DLL (assumed to be this run's link: UBT internal) (unity blobs, adaptive non-unity
+# objects), and a leftover .obj in the folder is reported but not judged. Only .obj entries under this
+# mod's own Intermediate folder are checked (the engine's shared PCH object and Default.rc2.res are
+# not recompiled per run). The rsp is rewritten only when its content changes, so it shows the link
+# set only together with A3's DLL-written-this-run check. -VerifyOnly: listed, freshness not-tested,
+# never fails on freshness under -VerifyOnly (not-tested); a missing rsp, bad /OUT, zero objects or a missing object fail in both modes, as A3 does.
+function Test-Objects($RunStart) {
+    $verify = $null -eq $RunStart
+    $tag = 'FAIL'
+    $src = Join-Path $StarterProject "Mods\$ModName\Source"
+    $own = (Join-Path $StarterProject "Mods\$ModName\Intermediate").Replace('/', '\').TrimEnd('\') + '\'
+    $ok = $true; $checked = 0; $stale = 0
+    $mods = if (Test-Path -LiteralPath $src -PathType Container) { @(Get-ChildItem -LiteralPath $src -Directory | Where-Object { Test-Path (Join-Path $_.FullName "$($_.Name).Build.cs") }) } else { @() }
+    if ($mods.Count -eq 0) { Write-Host "HSBUILD OBJ $tag no module folder with a Build.cs under $src"; $ok = $false }
+    foreach ($mod in $mods) {
+        foreach ($t in $UhtTargets) {
+            $dir = Join-Path $StarterProject "Mods\$ModName\Intermediate\Build\Win64\x64\$t\Shipping\$($mod.Name)"
+            $leaf = "$t-$($mod.Name)-Win64-Shipping.dll"
+            $rsp = Join-Path $dir "$leaf.rsp"
+            if (-not (Test-Path -LiteralPath $rsp -PathType Leaf)) { Write-Host "HSBUILD OBJ $tag target=$t module=$($mod.Name) rsp=$rsp exists=False"; $ok = $false; continue }
+            $lines = @(Get-Content -LiteralPath $rsp | ForEach-Object { $_.Trim() })
+            $outLine = @($lines | Where-Object { $_ -match '^/OUT:' } | Select-Object -First 1)
+            $outPath = if ($outLine.Count) { ($outLine[0] -replace '^/OUT:', '').Trim('"').Replace('/', '\') } else { '' }
+            $outOk = $outPath.EndsWith('\' + $leaf, [StringComparison]::OrdinalIgnoreCase)
+            $objs = @($lines | Where-Object { $_ -notmatch '^/' -and $_ -match '\.obj"?$' } | ForEach-Object { $_.Trim('"').Replace('/', '\') })
+            $mine = @($objs | Where-Object { $_.StartsWith($own, [StringComparison]::OrdinalIgnoreCase) })
+            $relObjs = @($objs | Where-Object { -not [System.IO.Path]::IsPathRooted($_) })
+            Write-Host ("HSBUILD OBJ target={0} module={1} rsp={2} rspMtime={3} out={4} outIsModuleDll={5} objInRsp={6} objInRspThisMod={7} objRelative={8}" -f $t, $mod.Name, $rsp,
+                (Get-Item -LiteralPath $rsp).LastWriteTimeUtc.ToString('o'), $(if ($outPath) { $outPath } else { 'absent' }), $outOk, $objs.Count, $mine.Count, $relObjs.Count)
+            if (-not $outOk) { Write-Host "HSBUILD OBJ $tag rsp /OUT does not name $leaf"; $ok = $false }
+            if ($mine.Count -eq 0) { Write-Host "HSBUILD OBJ $tag target=$t module=$($mod.Name) zero objects under $own in the rsp"; $ok = $false }
+            foreach ($o in $mine) {
+                if (-not (Test-Path -LiteralPath $o -PathType Leaf)) { Write-Host "HSBUILD OBJ $tag obj=$o exists=False"; $ok = $false; continue }
+                $mt = (Get-Item -LiteralPath $o).LastWriteTimeUtc
+                $fresh = if ($verify) { 'not-tested' } else { [bool]($mt -ge $RunStart) }
+                Write-Host ("HSBUILD OBJ obj={0} mtime={1} writtenThisRun={2}" -f $o, $mt.ToString('o'), $fresh)
+                $checked++
+                if ($fresh -eq $false) { $stale++; $ok = $false; Write-Host ("HSBUILD OBJ STALE obj={0} mtime={1} runStart={2}" -f $o, $mt.ToString('o'), $RunStart.ToString('o')) }
+            }
+            if (Test-Path -LiteralPath $dir -PathType Container) {
+                foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Filter *.obj | Where-Object { $mine -notcontains $_.FullName })) {
+                    Write-Host ("HSBUILD OBJ notInRsp obj={0} mtime={1} (in the folder, not in the rsp; not judged)" -f $f.FullName, $f.LastWriteTimeUtc.ToString('o'))
+                }
+            }
+        }
+    }
+    Write-Host "HSBUILD OBJ SUMMARY targets=$($UhtTargets -join ',') objectsListed=$checked stale=$stale freshness=$(if ($verify) { 'not-tested' } else { 'tested' }) pass=$ok"
+    return $ok
+}
+
 function Invoke-PostGates($RunStart) {
     $logOk = $true
     if ($SkipUhtLogGate) { Write-Host "HSBUILD UHT-LOG skipped (-SkipUhtLogGate); header-tool evidence NOT checked" }
     else { $logOk = Test-UhtLog $RunStart }
     $thunkOk = Test-Thunks $RunStart
-    Write-Host "HSBUILD GATES uhtLog=$(if ($SkipUhtLogGate) { 'skipped' } else { $logOk }) thunks=$thunkOk"
+    try { $objOk = Test-Objects $RunStart } catch { Write-Host "HSBUILD OBJ threw: $($_.Exception.Message)"; $objOk = $false }
+    Write-Host "HSBUILD GATES uhtLog=$(if ($SkipUhtLogGate) { 'skipped' } else { $logOk }) thunks=$thunkOk objects=$objOk objectFreshness=$(if ($null -eq $RunStart) { 'not-tested' } else { 'tested' })"
     if (-not $thunkOk) { return 33 }
+    if (-not $objOk) { return 37 }
     if (-not $logOk) { return 32 }
     return 0
 }
@@ -260,7 +318,7 @@ try {
     if ($childCode -ne 0 -and $childCode -ne 17) { Write-Host "HSBUILD GATES not run (child exit $childCode)"; exit $childCode }
     try { $gate = Invoke-PostGates $runStart } catch { Write-Host "HSBUILD GATES threw: $($_.Exception.Message)"; $gate = 33 }
     if ($gate -ne 0 -or $childCode -ne 0) { Write-Host "HSBUILD DEPLOYED-UNVERIFIED: this run deployed a new DLL to $GameDir\FactoryGame\Mods\$ModName$(if ($Package) { " and wrote a release zip under $StarterProject\Saved\ArchivedPlugins\$ModName (do not upload it)" }) and a post-build gate failed (child $childCode, gates $gate). Do not launch the game on it until the last reviewed binary is restored or the gate is cleared." }
-    # A gate failure (32/33) outranks the child's 17: it is the reflection verdict; 17 is printed above by the child.
+    # A gate failure (32/33/37) outranks the child's 17: it is the reflection verdict; 17 is printed above by the child.
     exit $(if ($gate -ne 0) { $gate } else { $childCode })
 }
 finally {
