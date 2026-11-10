@@ -12,6 +12,7 @@
 #   .\build_wu_disabled.ps1 -Package              # release multi-target zip for ficsit
 #   .\build_wu_disabled.ps1 -ModName HostileScaling -Package
 #   .\build_wu_disabled.ps1 -VerifyOnly           # post-build gates only, against what is deployed now
+#   .\build_wu_disabled.ps1 -KeepWeaponUpgrades   # opt-in: leave WeaponUpgrades.uplugin in place (no rename, no restore)
 #   .\build_wu_disabled.ps1 -VerifyOnly -SkipUhtLogGate -ExtraThunk AHostileScalingSubsystem::NoSuchFn  # forced FAIL
 #
 # Delegates the actual work (game-check, cross-session lock, mirror sync, UAT,
@@ -31,7 +32,8 @@
 #  A3 the deployed DLL must carry the class-qualified native-thunk export for every UFUNCTION declared
 #     on an exported class in the mod's headers (derived, never hard-coded).
 # Exit codes added here: 30 child exit code unreadable, 31 child threw, 32 header-tool log gate,
-# 33 thunk gate, 34 header mtime update failed or a stamp not older than it, 35 liveLatencySeconds pin.
+# 33 thunk gate, 34 header mtime update failed or a stamp not older than it, 35 liveLatencySeconds pin,
+# 36 -KeepWeaponUpgrades given while WeaponUpgrades.uplugin.disabled_for_build exists.
 # Every other code is the child's.
 
 param(
@@ -39,6 +41,7 @@ param(
     [switch]$Package,
     [switch]$VerifyOnly,
     [switch]$SkipUhtLogGate,
+    [switch]$KeepWeaponUpgrades,
     [string[]]$ExtraThunk = @(),
     [string]$SkillScripts = "$env:USERPROFILE\.claude\skills\satisfactory-modding\scripts",
     [string]$WuPlugin = "C:\Claude\Projects\SatisfactoryModLoader\Mods\WeaponUpgrades\WeaponUpgrades.uplugin",
@@ -223,13 +226,22 @@ if ($ModName -eq 'HostileScaling') {
     if (-not $a.Success -or -not $b.Success -or $a.Groups[1].Value -ne $b.Groups[1].Value) { Write-Host "HSBUILD FAIL liveLatencySeconds copy drifted"; exit 35 }
 }
 
+# mcp2-wu: with -KeepWeaponUpgrades nothing is renamed, so a set-aside plugin cannot be ours to restore.
+if ($KeepWeaponUpgrades -and (Test-Path -LiteralPath "$WuPlugin.disabled_for_build")) {
+    Write-Host "HSBUILD FAIL -KeepWeaponUpgrades: $WuPlugin.disabled_for_build exists; left untouched, no header touched, nothing delegated"
+    exit 36
+}
+
 $runStart = [DateTime]::UtcNow
 try { $touched = Update-HeaderMtimes } catch { Write-Host "HSBUILD UHT-FORCE threw: $($_.Exception.Message)"; $touched = $false }
 if (-not $touched) { Write-Host "HSBUILD FAIL header mtime update incomplete, or a UHT stamp is not older than the touch time (UHT-FORCE lines above); nothing delegated"; exit 34 }
 
 $disabled = "$WuPlugin.disabled_for_build"
 $renamed = $false
-if (Test-Path $WuPlugin) {
+if ($KeepWeaponUpgrades) {
+    $wuPresent = Test-Path -LiteralPath $WuPlugin
+    Write-Host "HSBUILD WU rename=skipped keepWeaponUpgrades=True upluginPresent=$wuPresent$(if (-not $wuPresent) { ' - not present, proceeding' })"
+} elseif (Test-Path $WuPlugin) {
     Rename-Item -Path $WuPlugin -NewName (Split-Path $disabled -Leaf)
     $renamed = $true
     Write-Host "WeaponUpgrades.uplugin -> .disabled_for_build"
