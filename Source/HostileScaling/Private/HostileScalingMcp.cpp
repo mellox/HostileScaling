@@ -25,7 +25,13 @@ namespace
 {
     constexpr int32 McpDefaultRows = 25;
     constexpr int32 McpMaxRows = 100;             // hard clamp for count (spawners and nearest)
-    constexpr int32 McpRowBudgetChars = 56000;    // rows stop here; the envelope stays well under 64 KB
+    // Whole-reply cap (Advisory A1: keep the returned JSON near 40 KB or less). A row is appended only
+    // while envelope + rows + its comma stay <= McpRowBudgetChars; the tail after the rows is at most
+    // 75 chars (returned 3 digits, two bools, nextOffset up to 10 digits, closing brace), so the
+    // reply is <= McpReplyCapChars on every section. Arithmetic: _team/test-logs/2026-11-10-hostilescaling-mcp3-handoff.md.
+    constexpr int32 McpReplyCapChars = 40000;
+    constexpr int32 McpTailReserveChars = 100;
+    constexpr int32 McpRowBudgetChars = McpReplyCapChars - McpTailReserveChars;
     constexpr int32 McpMaxStringChars = 512;      // per string value, before escaping
     constexpr int32 McpMaxArgsChars = 1024;
     constexpr int32 McpEchoChars = 64;             // caller text echoed into error objects (contract R3.3)
@@ -204,8 +210,9 @@ FString AHostileScalingSubsystem::McpDescribe() const
     FString Out = McpHead();
     Out += TEXT(",\"authority\":\"server\",\"logCategories\":[\"LogHostileScaling\"]");
     Out += TEXT(",\"snapshotArgs\":{\"section\":\"absent for a summary, or all | spawners | nearest\",");
-    Out += FString::Printf(TEXT("\"count\":\"integer row count for spawners, all and nearest, default %d, clamped to 1..%d\","), McpDefaultRows, McpMaxRows);
-    Out += TEXT("\"offset\":\"integer row offset for spawners, all and nearest; spawners and all are sorted by path key, nearest by distance at call time\"}");
+    Out += FString::Printf(TEXT("\"count\":\"integer row count for spawners, all and nearest, default %d, clamped to 1..%d; a page also ends before count rows so that the reply stays within %d characters\","),
+        McpDefaultRows, McpMaxRows, McpReplyCapChars);
+    Out += TEXT("\"offset\":\"integer row offset for spawners, all and nearest; spawners and all are sorted by path key, nearest by distance at call time; while hasMore is true, send the previous reply's nextOffset to continue\"}");
     Out += TEXT(",\"config\":{\"kind\":\"sml-config\",\"id\":\"HostileScaling\",\"keys\":{");
     bool bFirst = true;
     for (const FKeyRow& Row : Keys)
@@ -244,6 +251,11 @@ FString AHostileScalingSubsystem::McpDescribe() const
         Out += (bFirst ? TEXT("") : TEXT(",")) + JStr(H[0]) + TEXT(":") + JStr(H[1]);
         bFirst = false;
     }
+    // Paging fields of the row sections (mcp3). nextOffset is this mod's field, not a frozen-v1 name.
+    Out += TEXT("},\"pageFields\":{");
+    Out += TEXT("\"truncated\":") + JStr(FString::Printf(TEXT("True when this reply stopped before count rows so that the reply stays within %d characters."), McpReplyCapChars));
+    Out += TEXT(",\"hasMore\":") + JStr(TEXT("True when loaded spawners exist past offset plus returned, in the order computed for this call."));
+    Out += TEXT(",\"nextOffset\":") + JStr(TEXT("The offset to send for the next page: offset plus returned while hasMore is true, otherwise -1. It indexes the order computed at the NEXT call: path-key order of the spawners loaded then (spawners, all), or distance from the player's position then (nearest), so rows can repeat or be skipped if spawners load or unload or the player moves between calls."));
     Out += TEXT("}}}");
     return Out;
 }
@@ -415,6 +427,8 @@ FString AHostileScalingSubsystem::McpSnapshot(const FString& ArgsJson)
     // ---- Rows (spawners, all, nearest). -----------------------------------
     int32 Rows = 0;
     bool bTruncated = false;
+    bool bHasMore = false;
+    int32 NextOffset = -1;
     if (!Section.IsEmpty())
     {
         const bool bNearest = Section == TEXT("nearest");
@@ -455,7 +469,7 @@ FString AHostileScalingSubsystem::McpSnapshot(const FString& ArgsJson)
         for (int32 Idx = Start; Idx < Entries.Num() && Rows < Count; ++Idx)
         {
             const FString Row = McpSpawnerRow(Entries[Idx].Spawner, bNearest ? FMath::Sqrt(Entries[Idx].DistSq) : -1.0);
-            if (Out.Len() + Row.Len() > McpRowBudgetChars)
+            if (Out.Len() + (Rows > 0 ? 1 : 0) + Row.Len() > McpRowBudgetChars)
             {
                 bTruncated = true;
                 break;
@@ -463,13 +477,18 @@ FString AHostileScalingSubsystem::McpSnapshot(const FString& ArgsJson)
             Out += (Rows > 0 ? TEXT(",") : TEXT("")) + Row;
             ++Rows;
         }
-        // truncated = stopped by the size budget; hasMore = rows remain past this page.
-        const bool bHasMore = Start + Rows < Entries.Num();
-        Out += FString::Printf(TEXT("],\"returned\":%d,\"truncated\":%s,\"hasMore\":%s"), Rows, JBool(bTruncated), JBool(bHasMore));
+        if (Rows == 0 && Start < Entries.Num()) { return McpError(TEXT("too-large"), FString::Printf(TEXT("the row at offset %d does not fit the %d character reply cap"), Start, McpReplyCapChars)); }
+        // truncated = stopped by the size budget; hasMore = rows remain past this page (contract R4.2).
+        // nextOffset (not defined by frozen v1; named by Advisory A1; same shape as PrimalFauna's):
+        // the offset to send for the next page, offset + returned, or -1 when hasMore is false.
+        bHasMore = Start + Rows < Entries.Num();
+        NextOffset = bHasMore ? Start + Rows : -1;
+        Out += FString::Printf(TEXT("],\"returned\":%d,\"truncated\":%s,\"hasMore\":%s,\"nextOffset\":%d"),
+            Rows, JBool(bTruncated), JBool(bHasMore), NextOffset);
     }
     Out += TEXT("}");
 
-    UE_LOG(LogHostileScaling, Verbose, TEXT("[MCP] McpSnapshot section %s rows %d truncated %d chars %d"),
-        Section.IsEmpty() ? TEXT("summary") : *Section, Rows, bTruncated ? 1 : 0, Out.Len());
+    UE_LOG(LogHostileScaling, Verbose, TEXT("[MCP] McpSnapshot section %s rows %d truncated %d hasMore %d nextOffset %d chars %d cap %d"),
+        Section.IsEmpty() ? TEXT("summary") : *Section, Rows, bTruncated ? 1 : 0, bHasMore ? 1 : 0, NextOffset, Out.Len(), McpReplyCapChars);
     return Out;
 }
