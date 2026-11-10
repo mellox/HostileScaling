@@ -28,6 +28,10 @@ namespace
     constexpr int32 McpRowBudgetChars = 56000;    // rows stop here; the envelope stays well under 64 KB
     constexpr int32 McpMaxStringChars = 512;      // per string value, before escaping
     constexpr int32 McpMaxArgsChars = 1024;
+    constexpr int32 McpEchoChars = 64;             // caller text echoed into error objects (contract R3.3)
+    // Copy of RefreshIntervalSeconds (HostileScalingSubsystem.cpp:17, file-local there and that file is
+    // frozen): every config key is re-read on that timer. KEEP IN SYNC by hand.
+    constexpr int32 McpRefreshIntervalSeconds = 10;
 
     // JSON string literal: escapes quote, backslash and control chars; every
     // non-ASCII char becomes a \u escape so the output stays ASCII.
@@ -58,6 +62,15 @@ namespace
     }
 
     const TCHAR* JBool(bool b) { return b ? TEXT("true") : TEXT("false"); }
+
+    // Caller-supplied text echoed into an error: clipped to McpEchoChars, never splitting a surrogate pair.
+    FString ClipEcho(const FString& In)
+    {
+        if (In.Len() <= McpEchoChars) { return In; }
+        int32 Len = McpEchoChars;
+        if (In[Len - 1] >= 0xD800 && In[Len - 1] <= 0xDBFF) { --Len; }
+        return In.Left(Len) + TEXT("...");
+    }
 
     // TODO(2026-11-09): duplicate of SpawnerIsHostile; fold into one private static member when HostileScalingSubsystem.cpp is next unfrozen.
     // Copy of SpawnerIsHostile (HostileScalingSubsystem.cpp:23-36, anonymous
@@ -168,39 +181,70 @@ FString AHostileScalingSubsystem::McpDescribe() const
     // BeginPlay and in the menu. Every key is re-read by RefreshScaling on the
     // 10 s timer (HostileScalingSubsystem.cpp:17,81-83,202); classifications and
     // proving lines are in _team/test-logs/2026-11-09-hostilescaling-mcp1-handoff.md.
-    struct FKeyRow { const TCHAR* Key; bool bTouchesSave; const TCHAR* Note; };
+    // SaveEffect per contract R2.1 (none | gameplay | structural); grades and proving lines in
+    // _team/test-logs/2026-11-10-hostilescaling-mcp2-handoff.md. Unsure means structural.
+    struct FKeyRow { const TCHAR* Key; bool bTouchesSave; const TCHAR* SaveEffect; const TCHAR* Note; };
     static const FKeyRow Keys[] = {
-        {TEXT("Enabled"), true, TEXT("Master switch. Off: published health and damage multipliers become 1, so hostile untamed creatures that begin play with scaled health are written back to vanilla health, and, when the keeper was on, loaded spawners have radii restored and near-base re-traced (a SaveGame flag). On: every write below resumes.")},
-        {TEXT("HealthBase"), true, TEXT("Health multiplier input. Writes max and current health (SaveGame fields) on live hostile creatures, recomputed from the class default each sweep.")},
-        {TEXT("HealthPerTier"), true, TEXT("Health multiplier input, per unlocked milestone tier. Same writes as HealthBase.")},
-        {TEXT("HealthMax"), true, TEXT("Health multiplier cap. Same writes as HealthBase.")},
-        {TEXT("DamageBase"), true, TEXT("Damage multiplier input. The damage hooks scale damage hostile creatures deal to players; the game then applies it to SaveGame health.")},
-        {TEXT("DamagePerTier"), true, TEXT("Damage multiplier input, per unlocked milestone tier. Same effect as DamageBase.")},
-        {TEXT("DamageMax"), true, TEXT("Damage multiplier cap. Same effect as DamageBase.")},
-        {TEXT("ScaleDamageToBuildings"), true, TEXT("Extends the damage hooks to non-player targets, so scaled creature damage also reaches building and vehicle health.")},
-        {TEXT("SpawnBase"), true, TEXT("Spawn multiplier input. Sets hostile respawn days (not SaveGame) and, while IncreaseSpawnCounts is on, grows or trims spawner slot arrays (SaveGame).")},
-        {TEXT("SpawnPerTier"), true, TEXT("Spawn multiplier input, per unlocked milestone tier. Same writes as SpawnBase.")},
-        {TEXT("SpawnMax"), true, TEXT("Spawn multiplier cap. Same writes as SpawnBase.")},
-        {TEXT("IncreaseSpawnCounts"), true, TEXT("Gates growth and trim of HOSTILE spawner slot arrays (SaveGame). Off leaves grown hostile arrays at their current size; passive arrays are trimmed toward their recorded size regardless.")},
-        {TEXT("KeepCreaturesRespawning"), true, TEXT("Pins the near-base flag and re-arms killed slots (both SaveGame); widens the spawn radius of spawners starved for 3 consecutive sweeps, up to x3. Off restores radii and re-traces near-base on loaded spawners.")},
-        {TEXT("VerboseRespawnLogging"), false, TEXT("Log output only. Forced quiet while Enabled is off.")},
+        {TEXT("Enabled"), true, TEXT("structural"), TEXT("Master switch. Off: published health and damage multipliers become 1, so hostile untamed creatures that begin play with scaled health are written back to vanilla health, and, when the keeper was on, loaded spawners have radii restored and near-base re-traced (a SaveGame flag). On: every write below resumes.")},
+        {TEXT("HealthBase"), true, TEXT("gameplay"), TEXT("Health multiplier input. Writes max and current health (SaveGame fields) on live hostile creatures, recomputed from the class default each sweep.")},
+        {TEXT("HealthPerTier"), true, TEXT("gameplay"), TEXT("Health multiplier input, per unlocked milestone tier. Same writes as HealthBase.")},
+        {TEXT("HealthMax"), true, TEXT("gameplay"), TEXT("Health multiplier cap. Same writes as HealthBase.")},
+        {TEXT("DamageBase"), true, TEXT("structural"), TEXT("Damage multiplier input. The damage hooks scale damage hostile creatures deal to players; the game then applies it to SaveGame health.")},
+        {TEXT("DamagePerTier"), true, TEXT("structural"), TEXT("Damage multiplier input, per unlocked milestone tier. Same effect as DamageBase.")},
+        {TEXT("DamageMax"), true, TEXT("structural"), TEXT("Damage multiplier cap. Same effect as DamageBase.")},
+        {TEXT("ScaleDamageToBuildings"), true, TEXT("structural"), TEXT("Extends the damage hooks to non-player targets, so scaled creature damage also reaches building and vehicle health.")},
+        {TEXT("SpawnBase"), true, TEXT("structural"), TEXT("Spawn multiplier input. Sets hostile respawn days (not SaveGame) and, while IncreaseSpawnCounts is on, grows or trims spawner slot arrays (SaveGame).")},
+        {TEXT("SpawnPerTier"), true, TEXT("structural"), TEXT("Spawn multiplier input, per unlocked milestone tier. Same writes as SpawnBase.")},
+        {TEXT("SpawnMax"), true, TEXT("structural"), TEXT("Spawn multiplier cap. Same writes as SpawnBase.")},
+        {TEXT("IncreaseSpawnCounts"), true, TEXT("structural"), TEXT("Gates growth and trim of HOSTILE spawner slot arrays (SaveGame). Off leaves grown hostile arrays at their current size; passive arrays are trimmed toward their recorded size regardless.")},
+        {TEXT("KeepCreaturesRespawning"), true, TEXT("structural"), TEXT("Pins the near-base flag and re-arms killed slots (both SaveGame); widens the spawn radius of spawners starved for 3 consecutive sweeps, up to x3. Off restores radii and re-traces near-base on loaded spawners.")},
+        {TEXT("VerboseRespawnLogging"), false, TEXT("none"), TEXT("Log output only. Forced quiet while Enabled is off.")},
     };
 
     FString Out = McpHead();
-    Out += TEXT(",\"logCategories\":[\"LogHostileScaling\"]");
+    Out += TEXT(",\"authority\":\"server\",\"logCategories\":[\"LogHostileScaling\"]");
     Out += TEXT(",\"snapshotArgs\":{\"section\":\"absent for a summary, or all | spawners | nearest\",");
     Out += FString::Printf(TEXT("\"count\":\"integer row count for spawners, all and nearest, default %d, clamped to 1..%d\","), McpDefaultRows, McpMaxRows);
-    Out += TEXT("\"offset\":\"integer row offset for spawners and all, rows sorted by path key\"}");
+    Out += TEXT("\"offset\":\"integer row offset for spawners, all and nearest; spawners and all are sorted by path key, nearest by distance at call time\"}");
     Out += TEXT(",\"config\":{\"kind\":\"sml-config\",\"id\":\"HostileScaling\",\"keys\":{");
     bool bFirst = true;
     for (const FKeyRow& Row : Keys)
     {
         Out += bFirst ? TEXT("") : TEXT(",");
         bFirst = false;
-        Out += JStr(Row.Key) + TEXT(":{\"live\":\"tick\",\"persists\":\"cfg\",\"touchesSave\":") + JBool(Row.bTouchesSave)
-            + TEXT(",\"note\":") + JStr(Row.Note) + TEXT("}");
+        Out += JStr(Row.Key) + FString::Printf(TEXT(":{\"live\":\"tick\",\"liveLatencySeconds\":%d,\"persists\":\"cfg\",\"touchesSave\":%s,\"saveEffect\":"),
+                McpRefreshIntervalSeconds, JBool(Row.bTouchesSave))
+            + JStr(Row.SaveEffect) + TEXT(",\"note\":") + JStr(Row.Note) + TEXT("}");
     }
-    Out += TEXT("}},\"actions\":[]}");
+    Out += TEXT("}},\"actions\":[]");
+
+    // Row-field meanings (contract R4.3): the mod's own bookkeeping and the spawner's fields, read at call time.
+    static const TCHAR* const Help[][2] = {
+        {TEXT("rows"), TEXT("One row per spawner actor present in the world at call time (loaded spawners only); loadedTotal counts the same set.")},
+        {TEXT("key"), TEXT("The spawner's actor path name; also the key of the mod's saved per-spawner records.")},
+        {TEXT("creatureClass"), TEXT("Name of the spawner's creature class; null when the spawner has none.")},
+        {TEXT("hostile"), TEXT("True when the class default object is not passive, false when it is; null when the class is missing or its default object has not been created.")},
+        {TEXT("slots"), TEXT("Entries in the spawner's spawn data array now.")},
+        {TEXT("originalSlots"), TEXT("Slot count the mod recorded, before any scaling, the first time its sweep reached this spawner with IncreaseSpawnCounts on (earlier versions also recorded passive spawners); null when the mod holds no record.")},
+        {TEXT("waitingSlots"), TEXT("Slots the game flags as waiting for a spawn location now.")},
+        {TEXT("respawnDays"), TEXT("The spawner's respawn time in in-game days now; -1 is the game's never-respawn value.")},
+        {TEXT("originalRespawnDays"), TEXT("Respawn days the mod recorded the first time it saw this spawner; null when it holds no record.")},
+        {TEXT("nearBase"), TEXT("The spawner's cached near-base flag now.")},
+        {TEXT("starvationStreak"), TEXT("Consecutive sweeps this session, while the keeper is on, that found a waiting slot on this spawner; resets to 0 on reaching 3 and is removed when no slot waits; null when the mod holds no entry.")},
+        {TEXT("spawnRadius"), TEXT("The spawner's spawn radius now, in world units.")},
+        {TEXT("originalSpawnRadius"), TEXT("Radius the mod recorded before its first widening of this spawner; null when it never widened it.")},
+        {TEXT("widenedThisSession"), TEXT("True when the mod widened this spawner's radius during this session.")},
+        {TEXT("location"), TEXT("The spawner actor's location in world units as the game reports it.")},
+        {TEXT("distanceCm"), TEXT("Distance from the first player pawn, nearest section only.")},
+    };
+    Out += TEXT(",\"help\":{\"rowFields\":{");
+    bFirst = true;
+    for (const auto& H : Help)
+    {
+        Out += (bFirst ? TEXT("") : TEXT(",")) + JStr(H[0]) + TEXT(":") + JStr(H[1]);
+        bFirst = false;
+    }
+    Out += TEXT("}}}");
     return Out;
 }
 
@@ -230,6 +274,8 @@ FString AHostileScalingSubsystem::McpSpawnerRow(const AFGCreatureSpawner* Spawne
     Row += TEXT(",\"spawnRadius\":") + JNum(Spawner->GetSpawnRadius());
     Row += TEXT(",\"originalSpawnRadius\":") + (OrigRadius ? JNum(*OrigRadius) : FString(TEXT("null")));
     Row += FString::Printf(TEXT(",\"widenedThisSession\":%s"), JBool(WidenedSpawnerPaths.Contains(Key)));
+    const FVector Loc = Spawner->GetActorLocation();
+    Row += TEXT(",\"location\":{\"x\":") + JNum(Loc.X) + TEXT(",\"y\":") + JNum(Loc.Y) + TEXT(",\"z\":") + JNum(Loc.Z) + TEXT("}");
     if (DistanceCm >= 0.0)
     {
         Row += TEXT(",\"distanceCm\":") + JNum(DistanceCm);
@@ -260,18 +306,18 @@ FString AHostileScalingSubsystem::McpSnapshot(const FString& ArgsJson)
         }
         for (const TPair<FString, FString>& P : StrArgs)
         {
-            if (P.Key != TEXT("section")) { return McpError(TEXT("bad-args"), TEXT("unknown or non-integer-expected key: ") + P.Key); }
+            if (P.Key != TEXT("section")) { return McpError(TEXT("bad-args"), TEXT("unknown or non-integer-expected key: ") + ClipEcho(P.Key)); }
             Section = P.Value;
         }
         for (const TPair<FString, int32>& P : IntArgs)
         {
             if (P.Key == TEXT("count")) { Count = P.Value; }
             else if (P.Key == TEXT("offset")) { Offset = P.Value; }
-            else { return McpError(TEXT("bad-args"), TEXT("unknown or non-string-expected key: ") + P.Key); }
+            else { return McpError(TEXT("bad-args"), TEXT("unknown or non-string-expected key: ") + ClipEcho(P.Key)); }
         }
         if (!Section.IsEmpty() && Section != TEXT("all") && Section != TEXT("spawners") && Section != TEXT("nearest"))
         {
-            return McpError(TEXT("bad-args"), TEXT("section must be all, spawners or nearest; got ") + Section);
+            return McpError(TEXT("bad-args"), TEXT("section must be all, spawners or nearest; got ") + ClipEcho(Section));
         }
         if (Offset < 0)
         {
@@ -403,7 +449,7 @@ FString AHostileScalingSubsystem::McpSnapshot(const FString& ArgsJson)
             Entries.Sort([](const FEntry& A, const FEntry& B) { return A.Key < B.Key; });
         }
 
-        const int32 Start = bNearest ? 0 : Offset;
+        const int32 Start = Offset;   // every row section pages, nearest included (sorted by distance)
         Out += FString::Printf(TEXT(",\"loadedTotal\":%d,\"offset\":%d,\"countRequested\":%d,\"countUsed\":%d,\"rows\":["),
             Entries.Num(), Start, RequestedCount, Count);
         for (int32 Idx = Start; Idx < Entries.Num() && Rows < Count; ++Idx)
