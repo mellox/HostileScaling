@@ -41,6 +41,18 @@ public:
     // Returns true when the flag actually flipped (was true).
     static bool PinNearBaseFalse(AFGCreatureSpawner* Spawner);
 
+    // MCP contract v1 (_team/mcp-mod-contract-v1.md), defined in
+    // HostileScalingMcp.cpp. Found by name through reflection; no dependency on
+    // any MCP module. Both are READ-ONLY: they write nothing in this mod (this
+    // actor, spawners, creatures, config values, globals); reading config may let
+    // SML's config manager cache a struct entry, the same entry RefreshScaling
+    // already creates. Dead code when nobody calls them.
+    UFUNCTION()
+    FString McpDescribe() const;
+
+    UFUNCTION()
+    FString McpSnapshot(const FString& ArgsJson);
+
     // IFGSaveInterface
     virtual bool ShouldSave_Implementation() const override { return true; }
     virtual bool NeedTransform_Implementation() override { return false; }
@@ -57,6 +69,10 @@ private:
     void RefreshScaling();
     int32 GetHighestUnlockedTier() const;
     static float ComputeMultiplier(float Base, float PerTier, float Max, int32 Tier);
+
+    // McpSnapshot per-spawner JSON row (read-only; member so the existing
+    // friend grant covers the mSpawnData read). DistanceCm < 0 omits distance.
+    FString McpSpawnerRow(const AFGCreatureSpawner* Spawner, double DistanceCm) const;
 
     // Respawn keeper, per spawner (feature toggle already checked by caller;
     // never called for vanilla never-respawn spawners): near-base pin,

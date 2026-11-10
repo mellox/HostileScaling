@@ -1,6 +1,7 @@
 #include "HostileScaling.h"
 #include "HostileScalingGlobals.h"
 #include "HostileScalingSubsystem.h"
+#include "HostileScalingBuildMarker.h"
 
 #include "EngineUtils.h"
 #include "Patching/NativeHookManager.h"
@@ -88,7 +89,7 @@ namespace
 
 void FHostileScalingModule::StartupModule()
 {
-    UE_LOG(LogHostileScaling, Display, TEXT("===== HostileScaling BUILD v1.1.1-rc3 2026-08-13 LOADED ====="));
+    UE_LOG(LogHostileScaling, Display, TEXT("===== HostileScaling BUILD " HOSTILESCALING_BUILD_MARKER " LOADED ====="));
 
 #if !WITH_EDITOR
     // Scale creature health the moment a creature spawns (or streams in from
