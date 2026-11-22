@@ -18,7 +18,7 @@ HostileScaling
 
 ## Short description (shown under the icon in the mod list) — max 128 chars
 
-Hostile creatures scale with your milestone tier and keep respawning where vanilla stops them. Passive wildlife is untouched.
+Hostile creatures scale with your milestone tier and keep respawning near your base. Passive wildlife is never scaled.
 
 ## Full description (Markdown)
 
@@ -26,29 +26,31 @@ Hostile creatures scale with your milestone tier and keep respawning where vanil
 # Hostile Scaling
 
 Make MASSAGE-2(A-B)b fight back. As you climb the milestone tiers, hostile
-creatures grow tougher, hit harder, and respawn faster — and they keep coming
-back even after you've industrialized half the planet, so the world never goes
-quiet.
+creatures grow tougher and hit harder — and they keep coming back near your
+factories, where vanilla stops them.
 
 ## What it does
 
-- **Health scaling** — hostile creatures get real scaled max health
-  (health-display mods show the true numbers)
-- **Damage scaling** — creature attacks hit harder (melee, projectile, and
-  explosion damage all covered)
-- **Spawn scaling** — faster respawns and denser packs, on hostile spawners only
+- **Health scaling** — hostile creatures get a real scaled max-health value:
+  the creature's own health is raised, not the damage it takes lowered
+- **Damage scaling** — damage hostile creatures deal to players is multiplied
+  (and, with the buildings option on, damage they deal to anything else); the
+  game's general, hit-based and area damage paths are all covered
+- **Spawn scaling** — shorter respawn waits and, with pack-size scaling on (the
+  default), bigger packs, on hostile spawners only. Respawn waits are kept in
+  whole in-game days, so a small multiplier can round to no change
 - **Respawn near factories** *(on by default)* — vanilla stops
-  respawning creatures near your base and in areas you've cleared out; this keeps
-  **hostile** spawners active so the planet stays dangerous. Cleared packs come back on their
-  normal (scaled) schedule, and a spawner you've built over widens its search
-  radius to find valid ground nearby. Passive wildlife keeps vanilla behavior.
-  Toggle it off for vanilla behavior everywhere.
+  respawning creatures near your base; this keeps **hostile** spawners near your
+  base active. Killed packs come back on their normal (scaled) schedule, and a
+  spawner that cannot find a place to spawn widens its search radius step by
+  step, up to three times its original size. Passive wildlife keeps vanilla
+  behavior. Turn it off to hand the near-base check back to the game.
 - **Tier progression** — every multiplier is `Base + PerTier × your highest
   unlocked milestone tier`, with a configurable cap
 
-Lizard doggos, tamed creatures, and passive fauna are never scaled — no extra health, no
-extra damage, no faster respawns, no bigger packs. The one exception is a one-time cleanup:
-on saves made by v1.1.0 or earlier, the mod walks passive packs back to the size it first
+Tamed creatures and creatures the game marks as passive are never scaled — no extra health,
+no extra damage, no faster respawns, no bigger packs. The one exception is a one-time cleanup:
+on saves made by v1.1.0 or earlier, the mod walks passive packs back toward the size it first
 recorded and hands their near-base flag back to the game (see the changelog below).
 
 ## Configuration
@@ -67,17 +69,21 @@ pause menu) and applies to a running game within ~10 seconds — no restart need
 | Respawn near factories | on |
 | Verbose respawn logging (troubleshooting) | off |
 
-With defaults, by tier 9 hostiles have ~2.35× health and damage and ~1.9× spawn
-rate. Crank the per-tier values and caps for a true nightmare planet.
+With defaults, at tier 9 hostiles have 2.35× health and damage, and the
+Respawn + Packs multiplier is 1.9×. Crank the per-tier values and caps for a
+true nightmare planet.
 
 ## Notes
 
-- Works in multiplayer (host/server needs the mod)
-- Scaling never compounds across save/load — always computed from vanilla values
-- The respawn keeper only writes vanilla-legal spawner state, so it's fully
-  reversible and never corrupts a save
-- Stacks with other creature mods (MoreEnemySpawns, BloodMoon); their effects
-  multiply together, so start gentle if you run several
+- Multiplayer: creature health and spawner changes are made only by the host
+  or server, so the mod must be installed there
+- Scaling does not compound across save/load: health is recomputed from each
+  creature type's default, and respawn time and pack size from the values the
+  mod recorded the first time it saw each spawner
+- The respawn keeper changes only spawner values the game itself uses (the
+  near-base flag, killed-creature bookkeeping and the search radius); turning
+  it off hands the near-base check back to the game and resets the search
+  radius it widened on the spawners currently loaded around you
 
 ## Credits
 
@@ -90,38 +96,27 @@ Report issues on the mod's GitHub issues page (link on this page) or ping me on
 the Satisfactory Modding Discord.
 ```
 
-## Changelog for this version (v1.1.1) — paste into the SMR version-upload form
+## Changelog for this version (v1.1.2) — paste into the SMR version-upload form
 
 ```
-Changed: spawn scaling and the respawn keeper are now HOSTILE-only. Through v1.1.0 the
-mod scaled every creature spawner, passive ones included, so doggo and ambient-fauna
-packs grew and kept respawning near your base. Health and damage scaling were always
-hostile-only; the spawner side now matches.
+Changed: compatibility update for Satisfactory 1.2.6. This version requires game build
+520140 (Satisfactory 1.2.6) or later and SML 3.12.1 or a later 3.x version.
 
-Migration: on saves made by v1.1.0 or earlier, passive spawners are walked back —
-creature-less extra pack slots are removed until the pack is back at the size recorded
-when the mod first saw the spawner, and the near-base flag is handed back to the game.
-With the master Enabled switch off, nothing is reverted.
+No change to how hostile creatures are scaled or kept respawning, and no setting was
+added, removed or renamed.
 
-Fixed: the near-base bypass no longer touches passive spawners at all. It is refused at
-the single point that writes the flag, so passive wildlife keeps vanilla's near-base
-suppression even while the feature is on.
-
-Changed: config panel clarity pass. The three spawn sliders are labelled "Respawn + Packs"
-because they always drive both, "Increase Spawn Counts" is now "Also Apply
-Spawn Scaling to Pack Size", and "Keep Creatures Respawning" is now "Respawn Near
-Factories". Setting values and saved configs are unchanged.
-
-Added: log diagnostics for the hostile/passive split and the passive migration, so a
-support log shows what was classified and what was trimmed.
-
-Respawn technique inspired by Blood Moon (Chris Cavalluzzi) as prior art; no code copied.
+Added: two reporting functions for other mods. Another mod can call them to read Hostile Scaling's current settings, multipliers and spawner state. They only read: they change no creature, spawner or setting. Nothing in Hostile Scaling calls them; they run only when another mod calls them.
 ```
+
+(The "Added" paragraph is one line on purpose: delete that line and the blank line above it to
+ship without the reporting-functions item. The matching bullet in CHANGELOG.md is also one
+self-contained bullet.)
 
 ## Compatibility info to set after upload
 
-- Stable branch: set **Works** only after the v1.1.1 runtime checklist passes in-game on the
-  current game build; the last recorded in-game test is v1.1.x, July 2026
+- Stable branch: set **Works** only after the v1.1.2 PACKAGE has passed an in-game check on game
+  build 520140. A development build from the same source loaded on 520140 with SML 3.12.1 on
+  2026-11-22, but that is a different binary from the package.
 - Experimental: untested — set "Works" only if tested, else leave unknown
 
 ## Form fields

@@ -4,6 +4,18 @@ All notable changes to this mod. Follows semantic versioning; the `.uplugin`
 integer `Version` stays `1` (SemVer major) across all 1.x releases — only
 `VersionName`/`SemVersion` change.
 
+## v1.1.2
+
+**Changed — compatibility update for Satisfactory 1.2.6.** This version requires game build 520140
+(Satisfactory 1.2.6) or later and SML 3.12.1 or a later 3.x version.
+
+- No change to how hostile creatures are scaled or kept respawning, and no setting was added,
+  removed or renamed.
+- **Added — two reporting functions for other mods.** Another mod can call them to read Hostile
+  Scaling's current settings, multipliers and spawner state. They only read: they change no
+  creature, spawner or setting. Nothing in Hostile Scaling calls them; they run only when another
+  mod calls them.
+
 ## v1.1.1
 
 **Changed — scaling and the respawn keeper are now HOSTILE-only.** Through v1.1.0 the mod scaled
