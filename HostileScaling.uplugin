@@ -5,7 +5,7 @@
 	"SemVersion": "1.1.2",
 	"GameVersion": ">=520140",
 	"FriendlyName": "Hostile Scaling",
-	"Description": "Scales hostile creature health, damage, and spawn frequency as you progress through milestone tiers, and keeps hostile creatures respawning where vanilla stops them (near your base). Passive wildlife is left at vanilla behavior. All rates and features are user-configurable via Mod Config.",
+	"Description": "Scales hostile creature health, damage, and spawn frequency as you progress through milestone tiers, and keeps hostile creatures respawning where vanilla stops them (near your base). Passive wildlife is left at vanilla behavior. The health, damage and spawn multipliers (base, per-tier increase and maximum) and the mod's on/off options are adjustable via Mod Config.",
 	"Category": "Modding",
 	"CreatedBy": "mello",
 	"CreatedByURL": "",

@@ -34,7 +34,7 @@ factories, where vanilla stops them.
 - **Health scaling** — hostile creatures get a real scaled max-health value, written on the creature itself
 - **Damage scaling** — damage hostile creatures deal to players is multiplied (and, with the buildings option on, damage they deal to anything else). The mod hooks the game's general, point and radial damage functions
 - **Spawn scaling** — shorter respawn waits and, with pack-size scaling on (the
-  default), bigger packs, on hostile spawners only. Respawn waits are kept in whole in-game days and rounded, so a short wait may not change: a 1-day wait stays 1 day at any multiplier up to 2×
+  default), bigger packs, on hostile spawners only. Respawn waits are kept in whole in-game days and rounded, so a short wait may not change: a 1-day wait stays 1 day at any multiplier from 1× to 2×
 - **Respawn near factories** *(on by default)* — vanilla stops
   respawning creatures near your base; this keeps **hostile** spawners near your
   base active. Killed creatures' spawn slots are re-armed once their (scaled) respawn wait has passed, and a
@@ -44,14 +44,13 @@ factories, where vanilla stops them.
 - **Tier progression** — every multiplier is `Base + PerTier × your highest
   unlocked milestone tier`, with a configurable cap
 
-Lizard doggos, tamed creatures and other creatures the game marks as passive get no extra health and deal no extra damage, and spawners of passive creatures get no faster respawns or bigger packs. The one exception is a one-time cleanup:
+Lizard doggos and other creatures the game marks as passive, and tamed creatures, get no extra health and deal no extra damage, and spawners of passive creatures get no faster respawns or bigger packs. The one exception is a one-time cleanup:
 on saves made by v1.1.0 or earlier, the mod walks passive packs back toward the size it first
 recorded and hands their near-base flag back to the game (see the changelog below).
 
 ## Configuration
 
-Everything is adjustable from the mod's panel in the **Mods menu** (main menu or
-pause menu) and applies to a running game within ~10 seconds — no restart needed:
+Everything in the table below is adjustable from the mod's panel in the **Mods menu** (main menu or pause menu), and most changes apply to a running game within about 10 seconds, no restart needed. Turning the mod off does not shrink packs that already grew, and creatures that are already alive keep their scaled health:
 
 | Setting | Default |
 |---|---|
