@@ -4,4 +4,4 @@
 // inside TEXT() by adjacent-literal concatenation, so the startup line in
 // HostileScaling.cpp stays ONE string literal in the DLL, and McpDescribe /
 // McpSnapshot report the identical text.
-#define HOSTILESCALING_BUILD_MARKER "v1.1.2-mcp3-css87 2026-11-22"
+#define HOSTILESCALING_BUILD_MARKER "v1.1.2 2026-11-22"
