@@ -13,8 +13,7 @@ integer `Version` stays `1` (SemVer major) across all 1.x releases — only
   removed or renamed.
 - **Added — two reporting functions for other mods.** Another mod can call them to read Hostile
   Scaling's current settings, multipliers and spawner state. They only read: they change no
-  creature, spawner or setting. Nothing in Hostile Scaling calls them; they run only when another
-  mod calls them.
+  creature, spawner or setting. Nothing in Hostile Scaling calls them.
 
 ## v1.1.1
 

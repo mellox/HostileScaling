@@ -31,25 +31,20 @@ factories, where vanilla stops them.
 
 ## What it does
 
-- **Health scaling** — hostile creatures get a real scaled max-health value:
-  the creature's own health is raised, not the damage it takes lowered
-- **Damage scaling** — damage hostile creatures deal to players is multiplied
-  (and, with the buildings option on, damage they deal to anything else); the
-  game's general, hit-based and area damage paths are all covered
+- **Health scaling** — hostile creatures get a real scaled max-health value, written on the creature itself
+- **Damage scaling** — damage hostile creatures deal to players is multiplied (and, with the buildings option on, damage they deal to anything else). The mod hooks the game's general, point and radial damage functions
 - **Spawn scaling** — shorter respawn waits and, with pack-size scaling on (the
-  default), bigger packs, on hostile spawners only. Respawn waits are kept in
-  whole in-game days, so a small multiplier can round to no change
+  default), bigger packs, on hostile spawners only. Respawn waits are kept in whole in-game days and rounded, so a short wait may not change: a 1-day wait stays 1 day at any multiplier up to 2×
 - **Respawn near factories** *(on by default)* — vanilla stops
   respawning creatures near your base; this keeps **hostile** spawners near your
-  base active. Killed packs come back on their normal (scaled) schedule, and a
+  base active. Killed creatures' spawn slots are re-armed once their (scaled) respawn wait has passed, and a
   spawner that cannot find a place to spawn widens its search radius step by
   step, up to three times its original size. Passive wildlife keeps vanilla
   behavior. Turn it off to hand the near-base check back to the game.
 - **Tier progression** — every multiplier is `Base + PerTier × your highest
   unlocked milestone tier`, with a configurable cap
 
-Tamed creatures and creatures the game marks as passive are never scaled — no extra health,
-no extra damage, no faster respawns, no bigger packs. The one exception is a one-time cleanup:
+Lizard doggos, tamed creatures and other creatures the game marks as passive get no extra health and deal no extra damage, and spawners of passive creatures get no faster respawns or bigger packs. The one exception is a one-time cleanup:
 on saves made by v1.1.0 or earlier, the mod walks passive packs back toward the size it first
 recorded and hands their near-base flag back to the game (see the changelog below).
 
@@ -75,8 +70,7 @@ true nightmare planet.
 
 ## Notes
 
-- Multiplayer: creature health and spawner changes are made only by the host
-  or server, so the mod must be installed there
+- Multiplayer: creature health and spawner changes are made only by the host or server; install the mod on the host or server and on every player's game
 - Scaling does not compound across save/load: health is recomputed from each
   creature type's default, and respawn time and pack size from the values the
   mod recorded the first time it saw each spawner
@@ -105,7 +99,7 @@ Changed: compatibility update for Satisfactory 1.2.6. This version requires game
 No change to how hostile creatures are scaled or kept respawning, and no setting was
 added, removed or renamed.
 
-Added: two reporting functions for other mods. Another mod can call them to read Hostile Scaling's current settings, multipliers and spawner state. They only read: they change no creature, spawner or setting. Nothing in Hostile Scaling calls them; they run only when another mod calls them.
+Added: two reporting functions for other mods. Another mod can call them to read Hostile Scaling's current settings, multipliers and spawner state. They only read: they change no creature, spawner or setting. Nothing in Hostile Scaling calls them.
 ```
 
 (The "Added" paragraph is one line on purpose: delete that line and the blank line above it to
